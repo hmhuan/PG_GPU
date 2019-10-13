@@ -125,7 +125,16 @@ __global__ void convertRgb2GrayKernel(uint8_t * inPixels, int width, int height,
 		uint8_t * outPixels)
 {
 	// TODO
-
+	int ix = blockIdx.x * blockDim.x + threadIdx.x;
+	int iy = blockIdx.y * blockDim.y + threadIdx.y;
+	if (ix < width && iy < height)
+	{
+		int i = iy * width + ix;
+		uint8_t r = inPixels[i * 3];
+		uint8_t g = inPixels[i * 3 + 1];
+		uint8_t b = inPixels[i * 3 + 2];
+		outPixels[i] = 0.299f * r + 0.587f * g + 0.114f * b;
+	}
 }
 
 void convertRgb2Gray(uint8_t * inPixels, int width, int height,
@@ -150,21 +159,35 @@ void convertRgb2Gray(uint8_t * inPixels, int width, int height,
 	}
 	else // use device
 	{
+		int numChannels = 3;
 		cudaDeviceProp devProp;
 		cudaGetDeviceProperties(&devProp, 0);
 		printf("GPU name: %s\n", devProp.name);
 		printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
 
 		// TODO: Allocate device memories
+		uint8_t *d_inPixels, * d_outPixels;
+		CHECK(cudaMalloc(&d_inPixels, height * width * numChannels * sizeof(uint8_t)));
+		CHECK(cudaMalloc(&d_outPixels, height * width * sizeof(uint8_t)));
 
 		// TODO: Copy data to device memories
+		CHECK(cudaMemcpy(d_inPixels, inPixels, height * width * numChannels * sizeof(uint8_t), cudaMemcpyHostToDevice));
 
 		// TODO: Set grid size and call kernel (remember to check kernel error)
-
+		dim3 gridSize((width - 1)/blockSize.x + 1, (height - 1)/blockSize.y + 1);
+		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_outPixels);
+		cudaError_t errSync  = cudaGetLastError();
+		cudaError_t errAsync = cudaDeviceSynchronize();
+		if (errSync != cudaSuccess)
+			printf("Sync kernel error: %s\n", cudaGetErrorString(errSync));
+		if (errAsync != cudaSuccess)
+			printf("Async kernel error: %s\n", cudaGetErrorString(errAsync));
 		// TODO: Copy result from device memories
+		CHECK(cudaMemcpy(outPixels, d_outPixels, height * width * sizeof(uint8_t), cudaMemcpyDeviceToHost));
 
 		// TODO: Free device memories
-
+		CHECK(cudaFree(d_inPixels));
+		CHECK(cudaFree(d_outPixels));
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
