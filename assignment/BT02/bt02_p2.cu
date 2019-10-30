@@ -49,40 +49,9 @@ struct GpuTimer
     }
 };
 
-__global__ void reduceBlksKernel1(int * in, int n, int * out)
+__global__ void reduceBlksKernel(int * in, int n, int * out)
 {
-	// TODO
-    int i = blockIdx.x * blockDim.x * 2 + threadIdx.x * 2;
-    for (int stride = 1; stride < blockDim.x * 2; stride *= 2){
-        if (threadIdx.x % stride == 0)
-            if (i + stride < n){
-                in[i] += in[i + stride];
-            }
-        __syncthreads(); // Synchronize  within each block
-    }
-    if (threadIdx.x == 0)
-        out[blockIdx.x] = in[blockIdx.x * blockDim.x * 2];
-}
-
-__global__ void reduceBlksKernel2(int * in, int n, int * out)
-{
-	// TODO
-    int numElemsBeforeBlks = blockIdx.x * blockDim.x * 2;
-    for (int stride = 1; stride < blockDim.x * 2; stride *= 2){
-        int i = numElemsBeforeBlks + threadIdx.x * 2 * stride;
-        if (threadIdx.x < blockDim.x / stride)
-            if (i + stride < n){
-                in[i] += in[i + stride];
-            }
-        __syncthreads(); // Synchronize  within each block
-    }
-    if (threadIdx.x == 0)
-        out[blockIdx.x] = in[blockIdx.x * blockDim.x * 2];
-}
-
-__global__ void reduceBlksKernel3(int * in, int n, int * out)
-{
-	// TODO
+	// TODO: Copy-paste the best kernel you have implemented in "bt02.cu" 
     int i = blockIdx.x * blockDim.x * 2 + threadIdx.x;
     for (int stride = blockDim.x; stride > 0; stride /= 2){
         if (threadIdx.x < stride)
@@ -95,11 +64,13 @@ __global__ void reduceBlksKernel3(int * in, int n, int * out)
 }
 
 int reduce(int const * in, int n,
-        bool useDevice=false, dim3 blockSize=dim3(1), int kernelType=1)
+        int useDevice=0, dim3 blockSize=dim3(1))
 {
+    GpuTimer timer;
+    timer.Start();
 
 	int result = 0; // Init
-	if (useDevice == false)
+	if (useDevice == 0)
 	{
 		result = in[0];
 		for (int i = 1; i < n; i++)
@@ -107,7 +78,7 @@ int reduce(int const * in, int n,
 			result += in[i];
 		}
 	}
-	else // Use device
+	else if (useDevice == 1)// Use device partly
 	{
 		// Allocate device memories
 		int * d_in, * d_out;
@@ -119,16 +90,7 @@ int reduce(int const * in, int n,
 		CHECK(cudaMemcpy(d_in, in, n * sizeof(int), cudaMemcpyHostToDevice));
 
 		// Call kernel
-		GpuTimer timer;
-		timer.Start();
-		if (kernelType == 1)
-			reduceBlksKernel1<<<gridSize, blockSize>>>(d_in, n, d_out);
-		else if (kernelType == 2)
-			reduceBlksKernel2<<<gridSize, blockSize>>>(d_in, n, d_out);
-		else
-			reduceBlksKernel3<<<gridSize, blockSize>>>(d_in, n, d_out);
-		timer.Stop();
-		float kernelTime = timer.Elapsed();
+        reduceBlksKernel<<<gridSize, blockSize>>>(d_in, n, d_out);
 		cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
 
@@ -141,21 +103,62 @@ int reduce(int const * in, int n,
 		CHECK(cudaFree(d_out));
 
 		// Host do the rest of the work
-		timer.Start();
 		result = out[0];
 		for (int i = 1; i < gridSize.x; i++)
 			result += out[i];
-		timer.Stop();
-		float postKernelTime = timer.Elapsed();
 
 		// Free memory
 		free(out);
-
-		// Print info
-		printf("\nKernel %d\n", kernelType);
-		printf("Grid size: %d, block size: %d\n", gridSize.x, blockSize.x);
-		printf("Kernel time = %f ms, post-kernel time = %f ms\n", kernelTime, postKernelTime);
 	}
+    else // Use device fully
+    {
+        // TODO
+        // Allocate device memories
+		int * d_in, * d_out;
+		dim3 gridSize(1); // TODO: Compute gridSize from n and blockSize
+        gridSize.x = ((n - 1) / (2 * blockSize.x) + 1);
+		CHECK(cudaMalloc(&d_in, n * sizeof(int)));
+		CHECK(cudaMalloc(&d_out, gridSize.x * sizeof(int)));
+
+		// Copy data to device memory
+		CHECK(cudaMemcpy(d_in, in, n * sizeof(int), cudaMemcpyHostToDevice));
+        int m = n;
+		// Call kernel
+        while (m > 1)
+        {
+            gridSize.x = ((m - 1) / (2 * blockSize.x) + 1);
+            reduceBlksKernel<<<gridSize, blockSize>>>(d_in, m, d_out);
+		    cudaDeviceSynchronize();
+		    CHECK(cudaGetLastError());
+            m = gridSize.x;
+            CHECK(cudaMemcpy(d_in, d_out, m * sizeof(int), cudaMemcpyDeviceToDevice));
+        }
+
+		// Copy result from device memory
+		int * out = (int *)malloc(m * sizeof(int));
+        CHECK(cudaMemcpy(out, d_out, m * sizeof(int), cudaMemcpyDeviceToHost));
+
+		// Free device memories
+		CHECK(cudaFree(d_in));
+		CHECK(cudaFree(d_out));
+
+		// Host do the rest of the work
+		result = out[0];
+		for (int i = 1; i < gridSize.x; i++)
+			result += out[i];
+
+		// Free memory
+		free(out);
+    }
+
+	timer.Stop();
+	float time = timer.Elapsed();
+    if (useDevice == 0)
+        printf("\nProcessing time (use host): %f ms\n", time); 
+    else if (useDevice == 1)
+        printf("\nProcessing time (use device partly): %f ms\n", time); 
+    else
+        printf("\nProcessing time (use device fully): %f ms\n", time); 
 
 	return result;
 }
@@ -179,8 +182,7 @@ void printDeviceInfo()
     printf("Max num threads per SM: %d\n", devProv.maxThreadsPerMultiProcessor); 
     printf("Max num warps per SM: %d\n", devProv.maxThreadsPerMultiProcessor / devProv.warpSize);
     printf("GMEM: %lu bytes\n", devProv.totalGlobalMem);
-    printf("****************************\n\n");
-
+    printf("****************************\n");
 }
 
 int main(int argc, char ** argv)
@@ -188,8 +190,8 @@ int main(int argc, char ** argv)
 	printDeviceInfo();
 
 	// Set up input size
-    int n = (1 << 24) + 1;
-    printf("Input size: %d\n", n);
+    int n = (1 << 25) + 1;
+    printf("\nInput size: %d\n", n);
 
     // Set up input data
     int * in = (int *) malloc(n * sizeof(int));
@@ -202,20 +204,16 @@ int main(int argc, char ** argv)
     // Reduce NOT using device
     int correctResult = reduce(in, n);
 
-    // Reduce using device, kernel1
+    // Reduce using device partly
     dim3 blockSize(512); // Default
     if (argc == 2)
     	blockSize.x = atoi(argv[1]);
-    int result1 = reduce(in, n, true, blockSize, 1);
+    int result1 = reduce(in, n, 1, blockSize);
     checkCorrectness(result1, correctResult);
 
-    // Reduce using device, kernel2
-    int result2 = reduce(in, n, true, blockSize, 2);
+    // Reduce using device fully
+    int result2 = reduce(in, n, 2, blockSize);
     checkCorrectness(result2, correctResult);
-
-    // Reduce using device, kernel3
-    int result3 = reduce(in, n, true, blockSize, 3);
-    checkCorrectness(result3, correctResult);
 
     // Free memories
     free(in);
