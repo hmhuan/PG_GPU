@@ -71,7 +71,26 @@ write each block's sum to "blkSums" if "blkSums" is not NULL.
 __global__ void scanBlks1(int * in, int * out, int n, int * blkSums)
 {   
     // TODO
-     
+    extern __shared__ int s_data[];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+        s_data[threadIdx.x] = in[i];
+    else
+        s_data[threadIdx.x] = 0;
+    __syncthreads();
+    for (int stride = 1; stride < blockDim.x; stride *= 2)
+    {
+        if (threadIdx.x >= stride){
+            int neededVal = s_data[threadIdx.x - stride];
+            __syncthreads();
+            s_data[threadIdx.x] += neededVal;
+        }        
+        __syncthreads();
+    } 
+    if (i < n)
+        out[i] = s_data[threadIdx.x];
+    if (blkSums != NULL)
+        blkSums[blockIdx.x] = s_data[blockDim.x - 1];
 }
 
 /*
