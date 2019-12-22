@@ -219,7 +219,6 @@ void sortByDevice(const uint32_t * in, int n,
     
     CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
 
-    //printf("nBins: %d\n", nBins);
     // Loop from LSD (Least Significant Digit) to MSD (Most Significant Digit)
     // (Each digit consists of nBits bits)
 	// In each loop, sort elements according to the current digit 
@@ -241,10 +240,10 @@ void sortByDevice(const uint32_t * in, int n,
 
         //CHECK(cudaMemcpy(histScan, d_histScan, nBins * sizeof(int), cudaMemcpyDeviceToHost));
         //CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize2.x * sizeof(int), cudaMemcpyDeviceToHost));
-        //for (int i = 1; i < gridSize2.x; i++)
-        //    blkSums[i] += blkSums[i-1];
-        //for (int i = blkSize2.x; i < nBins; i++)
-        //    histScan[i] += blkSums[(i - 1) / blkSize2.x];
+        for (int i = 1; i < gridSize2.x; i++)
+            blkSums[i] += blkSums[i-1];
+        for (int i = blkSize2.x; i < nBins; i++)
+            histScan[i] += blkSums[(i - 1) / blkSize2.x];
 
         //addBlkSums<<<gridSize2, blkSize2>>>(d_histScan, nBins, d_blkSums);
         
@@ -277,14 +276,6 @@ void sortByDevice(const uint32_t * in, int n,
     free(originalSrc);
 }
 
-__global__ void computeBits(uint32_t * in, int n, int bit, int * out)
-{   
-    // TODO
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-        out[i] = (in[i] >> bit) & (1);
-}
-
 __global__ void scanBlkKernel_1(uint32_t *in, int n, int bit, int *out, int * blkSums)
 {   
     // TODO
@@ -292,8 +283,7 @@ __global__ void scanBlkKernel_1(uint32_t *in, int n, int bit, int *out, int * bl
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i > 0 && i < n)
     {
-        uint32_t val = in[i - 1];
-        s_data[threadIdx.x] = (val >> bit) & 1;
+        s_data[threadIdx.x] = (in[i - 1] >> bit) & 1;
     }
     else
         s_data[threadIdx.x] = 0;
@@ -317,11 +307,9 @@ __global__ void scanBlkKernel_1(uint32_t *in, int n, int bit, int *out, int * bl
 __global__ void scatter(uint32_t * in, int bit, int *inScan, int n, uint32_t *out)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t last_val = in[n - 1];
-    int nZeros = n - inScan[n - 1] - ((last_val >> bit) & 1);
     if (i < n)
     {
-       // uint32_t val = in[i];
+        int nZeros = n - inScan[n - 1] - ((in[n - 1] >> bit) & 1);
         int inBit = (in[i] >> bit) & 1;
         int rank = 0;
         if (inBit == 0)
@@ -332,11 +320,6 @@ __global__ void scatter(uint32_t * in, int bit, int *inScan, int n, uint32_t *ou
     }
 }
 void printArray(uint32_t * a, int n);
-void swap(uint32_t* &a, uint32_t* &b){
-  uint32_t *temp = a;
-  a = b;
-  b = temp;
-}
 
 void sortByDevice_base03(const uint32_t * in, int n, 
         uint32_t * out, int * blockSizes)
@@ -374,64 +357,35 @@ void sortByDevice_base03(const uint32_t * in, int n,
 	// (using STABLE counting sort)
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit++)
     {
-        printf("bit: %d\n", bit);
-    	// TODO: compute bits [0 1 1 . ...]
-        //computeBits<<<gridSize, blkSize>>>(d_src, n, bit, d_bits);
-        //cudaDeviceSynchronize();
-		//CHECK(cudaGetLastError());
-        //printf("compute Bits done..\n");
-        // copy to bits
-        //CHECK(cudaMemcpy(bits, d_bits, n * sizeof(int), cudaMemcpyDeviceToHost));
-        //printf("copy to bits done..\n");
-        // TODO: exclusice scan
-        CHECK(cudaMemcpy(src, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
-        printArray(src, min(100, n));
+    	// TODO: compute bits [0 1 1 . ..] and exclusice scan
         scanBlkKernel_1<<<gridSize, blkSize, sMemSize>>>(d_src, n, bit, d_bitsScan, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
-        printf("compute hist and exclusive scan done..\n");
-        //CHECK(cudaMemcpy(bitsScan, d_bitsScan, n * sizeof(int), cudaMemcpyDeviceToHost));
-        //CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize.x * sizeof(int), cudaMemcpyDeviceToHost));
-        //for (int i = blkSize.x; i < n; i++){
-        //    int id = (i - 1) / blkSize.x;
-        //    bitsScan[i] += blkSums[id];
-        //}
-        //CHECK(cudaMemcpy(d_bitsScan, bitsScan, n * sizeof(int), cudaMemcpyHostToDevice));
+        //printf("compute hist and exclusive scan done..\n");
+        
+        CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize.x * sizeof(int), cudaMemcpyDeviceToHost));
+        for (int i = 1; i < gridSize.x; i++)
+            blkSums[i] += blkSums[i-1];
+        CHECK(cudaMemcpy(d_blkSums, blkSums, gridSize.x * sizeof(int), cudaMemcpyHostToDevice));
+
         addBlkSums<<<gridSize, blkSize>>>(d_bitsScan, n, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
-        //CHECK(cudaMemcpy(bitsScan, d_bitsScan, n * sizeof(int), cudaMemcpyDeviceToHost));
-        printf("add block sums done..\n");
-    	// TODO: scatter
+        //printf("add block sums done..\n");
+    	
+        // TODO: scatter
         scatter<<<gridSize, blkSize>>>(d_src, bit, d_bitsScan, n, d_dst);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
         
-        // sequential scatter
-        // int nZeros = n - bits[n - 1] - bitsScan[n - 1];
-        // for (int i = 0; i < n; i++){
-        //     int rank = 0;
-        //     if (bits[i] == 0)
-        //         rank = i - bitsScan[i];
-        //     else
-        //     {
-        //         rank = nZeros + bitsScan[i];
-        //     }
-        //     dst[rank] = src[i];
-        // }
-        printf("scatter done..\n");
+        //printf("scatter done..\n");
     	// TODO: Swap "src" and "dst"
-        CHECK(cudaMemcpy(dst, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
-        //uint32_t * temp = src;
-        //src = dst;
-        //dst = temp;
-        printArray(dst, min(n, 100));
-        swap(d_src, d_dst);
-        printf("%p %p\n\n", d_src, d_dst);
+        uint32_t * d_temp = d_src;
+        d_src = d_dst;
+        d_dst = d_temp;
     }
     CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
-    printArray(out, min(n, 100));
     //free Cuda
     CHECK(cudaFree(d_src));
     CHECK(cudaFree(d_dst));
@@ -547,7 +501,7 @@ int main(int argc, char ** argv)
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
         in[i] = rand() % 100 + 1;
-    printArray(in, n);
+    //printArray(in, n);
     // SET UP NBITS
     int nBits = 4; // Default
     if (argc > 2)
@@ -567,8 +521,8 @@ int main(int argc, char ** argv)
     sort(in, n, correctOut, nBits, 0);
 
     // SORT BY DEVICE
-    //sort(in, n, out, nBits, 1, blockSizes);
-    //checkCorrectness(out, correctOut, n);
+    sort(in, n, out, nBits, 1, blockSizes);
+    checkCorrectness(out, correctOut, n);
 
     // SORT base 03
     sort(in, n, out_base03, 1, 2, blockSizes);
@@ -576,14 +530,14 @@ int main(int argc, char ** argv)
     //printArray(out_base03, n);
     
     // SORT BY DEVICE by thrust
-    //sort(in, n, out_thrust, nBits, 3, blockSizes);
-    //checkCorrectness(out_thrust, correctOut, n);
+    sort(in, n, out_thrust, nBits, 3, blockSizes);
+    checkCorrectness(out_thrust, correctOut, n);
 
     // FREE MEMORIES 
     free(in);
-    //free(out);
+    free(out);
     free(out_base03);
-    //free(out_thrust);
+    free(out_thrust);
     free(correctOut);
     
     return EXIT_SUCCESS;
