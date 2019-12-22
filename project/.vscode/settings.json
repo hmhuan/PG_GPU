@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.cu": "c",
+        "myscan.h": "c",
+        "*.cuh": "c"
+    }
+}
