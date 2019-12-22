@@ -291,7 +291,10 @@ __global__ void scanBlkKernel_1(uint32_t *in, int n, int bit, int *out, int * bl
     extern __shared__ int s_data[];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i > 0 && i < n)
-        s_data[threadIdx.x] = (in[i - 1] >> bit) & 1;
+    {
+        uint32_t val = in[i - 1];
+        s_data[threadIdx.x] = (val >> bit) & 1;
+    }
     else
         s_data[threadIdx.x] = 0;
     __syncthreads();
@@ -314,10 +317,12 @@ __global__ void scanBlkKernel_1(uint32_t *in, int n, int bit, int *out, int * bl
 __global__ void scatter(uint32_t * in, int bit, int *inScan, int n, uint32_t *out)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+    uint32_t last_val = in[n - 1];
+    int nZeros = n - inScan[n - 1] - ((last_val >> bit) & 1);
     if (i < n)
     {
+       // uint32_t val = in[i];
         int inBit = (in[i] >> bit) & 1;
-        int nZeros = n - inScan[n - 1] - ((in[n - 1] >> bit) & 1);
         int rank = 0;
         if (inBit == 0)
             rank = i - inScan[i];
@@ -350,7 +355,7 @@ void sortByDevice_base03(const uint32_t * in, int n,
     uint32_t *d_src, *d_dst;
 
 
-    size_t sMemSize = (blkSize.x / 2) * sizeof(int); // shared memory size for scan kernel
+    size_t sMemSize = blkSize.x * sizeof(int); // shared memory size for scan kernel
 
     int * blkSums = (int *)malloc(gridSize.x * sizeof(int));
     int * bitsScan = (int *)malloc(n * sizeof(int));
@@ -379,6 +384,8 @@ void sortByDevice_base03(const uint32_t * in, int n,
         //CHECK(cudaMemcpy(bits, d_bits, n * sizeof(int), cudaMemcpyDeviceToHost));
         //printf("copy to bits done..\n");
         // TODO: exclusice scan
+        CHECK(cudaMemcpy(src, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        printArray(src, min(100, n));
         scanBlkKernel_1<<<gridSize, blkSize, sMemSize>>>(d_src, n, bit, d_bitsScan, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
@@ -414,13 +421,13 @@ void sortByDevice_base03(const uint32_t * in, int n,
         // }
         printf("scatter done..\n");
     	// TODO: Swap "src" and "dst"
-        //CHECK(cudaMemcpy(d_src, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToDevice));
+        CHECK(cudaMemcpy(dst, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
         //uint32_t * temp = src;
         //src = dst;
         //dst = temp;
+        printArray(dst, min(n, 100));
         swap(d_src, d_dst);
         printf("%p %p\n\n", d_src, d_dst);
-        //CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
     }
     CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
@@ -539,8 +546,8 @@ int main(int argc, char ** argv)
 
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
-        in[i] = rand() % 1000 + 1;
-
+        in[i] = rand() % 100 + 1;
+    printArray(in, n);
     // SET UP NBITS
     int nBits = 4; // Default
     if (argc > 2)
