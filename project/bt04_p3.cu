@@ -166,7 +166,7 @@ __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
     }
     if (i < n)
         out[i] = s_data[threadIdx.x];
-    if (blkSums != NULL)
+    if (threadIdx.x == 0 && blkSums != NULL)
         blkSums[blockIdx.x] = s_data[blockDim.x - 1];
 }
 
@@ -174,7 +174,7 @@ __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
 __global__ void addBlkSums(int * in, int n, int* blkSums)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n && i >= blockDim.x)
+    if (i < n && blockIdx.x > 0)
         in[i] += blkSums[blockIdx.x - 1];
 }
 
@@ -246,7 +246,8 @@ void sortByDevice(const uint32_t * in, int n,
         //for (int i = blkSize2.x; i < nBins; i++)
         //    histScan[i] += blkSums[(i - 1) / blkSize2.x];
 
-        addBlkSums<<<gridSize2, blkSize2>>>(d_histScan, nBins, d_blkSums);
+        //addBlkSums<<<gridSize2, blkSize2>>>(d_histScan, nBins, d_blkSums);
+        
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
         CHECK(cudaMemcpy(histScan, d_histScan, nBins * sizeof(int), cudaMemcpyDeviceToHost));
@@ -287,10 +288,10 @@ __global__ void computeBits(uint32_t * in, int n, int bit, int * out)
 __global__ void scatter(uint32_t * in, int *inBits, int *inScan, int n, uint32_t *out)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int rank;
     if (i < n)
     {
         int nZeros = n - inScan[n - 1] - inBits[n - 1];
+        int rank = 0;
         if (inBits[i] == 0)
             rank = i - inScan[i];
         else
@@ -298,6 +299,7 @@ __global__ void scatter(uint32_t * in, int *inBits, int *inScan, int n, uint32_t
         out[rank] = in[i];
     }
 }
+void printArray(uint32_t * a, int n);
 
 void sortByDevice_base03(const uint32_t * in, int n, 
         uint32_t * out, int * blockSizes)
@@ -307,22 +309,18 @@ void sortByDevice_base03(const uint32_t * in, int n,
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
-    //uint32_t * dst = out;
 
     dim3 blkSize(blockSizes[0]); // block size for histogram kernel
-    //dim3 blkSize2(blockSizes[1]); // block size for scan kernel
     dim3 gridSize((n - 1) / blkSize.x + 1); // grid size for histogram kernel 
-    //dim3 gridSize2((n - 1)/ blkSize2.x + 1); // grid size for scan kernel
-    
-    //size_t smemSize = nBins * sizeof(int); // shared memory size for histogram kernel
+    printf("gridSize: %d\n", gridSize.x);
     int *d_bitsScan, * d_bits, * d_blkSums;
     uint32_t *d_src, *d_dst;
 
 
-    //int * blkSums;
-    //blkSums = (int*)malloc(gridSize.x * sizeof(int));
     size_t sMemSize = blkSize.x * sizeof(int); // shared memory size for scan kernel
 
+    int * blkSums = (int *)malloc(gridSize.x * sizeof(int));
+    int * bitsScan = (int *)malloc(n * sizeof(int));
     CHECK(cudaMalloc(&d_src, n * sizeof(uint32_t)));
     CHECK(cudaMalloc(&d_dst, n * sizeof(uint32_t)));
 	CHECK(cudaMalloc(&d_bitsScan, n * sizeof(int)));
@@ -345,7 +343,14 @@ void sortByDevice_base03(const uint32_t * in, int n,
         scanBlkKernel<<<gridSize, blkSize, sMemSize>>>(d_bits, n, d_bitsScan, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
-
+        
+        //CHECK(cudaMemcpy(bitsScan, d_bitsScan, n * sizeof(int), cudaMemcpyDeviceToHost));
+        //CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize.x * sizeof(int), cudaMemcpyDeviceToHost));
+        //for (int i = blkSize.x; i < n; i++){
+        //    int id = (i - 1) / blkSize.x;
+        //    bitsScan[i] += blkSums[id];
+        //}
+        //CHECK(cudaMemcpy(d_bitsScan, bitsScan, n * sizeof(int), cudaMemcpyHostToDevice));
         addBlkSums<<<gridSize, blkSize>>>(d_bitsScan, n, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
@@ -356,12 +361,14 @@ void sortByDevice_base03(const uint32_t * in, int n,
 		CHECK(cudaGetLastError());
 
     	// TODO: Swap "src" and "dst"
-        CHECK(cudaMemcpy(d_src, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToDevice));
-        //uint32_t * d_temp = d_src;
-        //d_src = d_dst;
-        //d_dst = d_temp;
+        //CHECK(cudaMemcpy(d_src, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToDevice));
+        uint32_t * d_temp = d_src;
+        d_src = d_dst;
+        d_dst = d_temp;
+        printf("%p %p\n", d_src, d_dst);
     }
-    CHECK(cudaMemcpy(out, d_dst, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    printArray(out, 500);
     //free Cuda
     CHECK(cudaFree(d_src));
     CHECK(cudaFree(d_dst));
@@ -370,6 +377,8 @@ void sortByDevice_base03(const uint32_t * in, int n,
     CHECK(cudaFree(d_blkSums));    
     // Free memories
     free(originalSrc);
+    free(blkSums);
+    free(bitsScan);
 }
 
 void sortByDevice_thrust(const uint32_t * in, int n, uint32_t * out)
@@ -436,6 +445,7 @@ void checkCorrectness(uint32_t * out, uint32_t * correctOut, int n)
     {
         if (out[i] != correctOut[i])
         {
+            printf("%d, %d != %d", i, out[i], correctOut[i]);
             printf("INCORRECT :(\n");
             return;
         }
@@ -492,22 +502,23 @@ int main(int argc, char ** argv)
     sort(in, n, correctOut, nBits, 0);
 
     // SORT BY DEVICE
-    sort(in, n, out, nBits, 1, blockSizes);
-    checkCorrectness(out, correctOut, n);
+    //sort(in, n, out, nBits, 1, blockSizes);
+    //checkCorrectness(out, correctOut, n);
 
     // SORT base 03
     sort(in, n, out_base03, 1, 2, blockSizes);
     checkCorrectness(out_base03, correctOut, n);
-
+    //printArray(out_base03, n);
+    
     // SORT BY DEVICE by thrust
-    sort(in, n, out_thrust, nBits, 3, blockSizes);
-    checkCorrectness(out_thrust, correctOut, n);
+    //sort(in, n, out_thrust, nBits, 3, blockSizes);
+    //checkCorrectness(out_thrust, correctOut, n);
 
     // FREE MEMORIES 
     free(in);
-    free(out);
+    //free(out);
     free(out_base03);
-    free(out_thrust);
+    //free(out_thrust);
     free(correctOut);
     
     return EXIT_SUCCESS;
