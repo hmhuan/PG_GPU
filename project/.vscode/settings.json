@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "*.cu": "c"
+        "*.cu": "c",
+        "myscan.h": "c"
     }
 }
