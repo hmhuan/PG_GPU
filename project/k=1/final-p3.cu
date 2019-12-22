@@ -123,34 +123,53 @@ void sortByHost(const uint32_t * in, int n,
 
 void testSort(const uint32_t *in, int n, uint32_t *out, int nBits, int *blockSizes)
 {
-        // GpuTimer timer, timerOverall; 
+    // GpuTimer timer, timerOverall; 
     // timerOverall.Start();
-    //for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
+    uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
+    memcpy(src, in, n * sizeof(uint32_t));
+    uint32_t * originalSrc = src; // Use originalSrc to free memory later
+    uint32_t * dst = out;
+    uint32_t *scan = (uint32_t*)malloc(sizeof(uint32_t)*(n + 1));
+    scan[0] = 0;
+    uint32_t *tmp = (uint32_t*)malloc(sizeof(uint32_t)*n);
+    //for (int bit = 0; bit < 2; bit += 1)
     {
-        uint32_t *scan = (uint32_t*)malloc(sizeof(uint32_t)*n);
-        // Scan
-        MyScan(in, scan, n, blockSizes[0]);
-        // scatter
-        MyScatter(in, scan, out, n, blockSizes[0]);
+	    // Preprocess 1 bit to scan
+	    for(int i = 0;i < n;i++)
+	    {
+	        tmp[i] = (src[i] >> 0)&1;
+        }
+        // for(int i = 0;i < n + 1;i++)
+        // {
+        //     cout << tmp[i] << ' ';
+        // }
+        // cout << endl;
 
-        for(int i = 0;i < n;i++)
-        {
-            cout << in[i] << ' ';
-        }
-        cout << endl;
-        for(int i = 0;i < n;i++)
-        {
-            cout << scan[i] << ' ';
-        }
-        cout << endl;
-        for(int i = 0;i < n;i++)
-        {
-            cout << out[i] << ' ';
-        }
-        cout << endl;
+        // TODO: Scan
+        MyScan(tmp, scan + 1, n, blockSizes[0]);
+
+        // TODO: Scatter
+        MyScatter(src, scan, dst, n, blockSizes[0]);
+        
+        // for(int i = 0;i < n;i++)
+        // {
+        //     cout << dst[i] << ' ';
+        // }
+        // cout << endl;
+	
+        uint32_t * temp = (uint32_t*)malloc(sizeof(uint32_t)*n);
+        memcpy(temp, src, n * sizeof(uint32_t));
+        memcpy(src, dst, n * sizeof(uint32_t));
+        memcpy(dst, temp, n * sizeof(uint32_t));
     }
+
+
+    memcpy(out, src, n * sizeof(uint32_t));
+    
     // timerOverall.Stop();
     // printf("Time: %.3f ms\n", timerOverall.Elapsed());
+
+    free(originalSrc), free(scan), free(tmp);
 }
 
 // (Partially) Parallel radix sort: implement parallel histogram and parallel scan in counting sort
@@ -241,8 +260,8 @@ int main(int argc, char ** argv)
 
     // SET UP INPUT SIZE
     int n = (1 << 24) + 1;
-    n = 5;
-    //n = 10;
+    //n = 5;
+    n = 2048;
     printf("\nInput size: %d\n", n);
 
     // ALLOCATE MEMORIES
@@ -253,7 +272,8 @@ int main(int argc, char ** argv)
 
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
-        in[i] = i % 2;
+        in[i] = rand() % 2;
+    //in[0] = 0, in[1] = 0, in[2] = 0, in[3] = 1, in[4] = 1;
     //printArray(in, n);
 
     // SET UP NBITS

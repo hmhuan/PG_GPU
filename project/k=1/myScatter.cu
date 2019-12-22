@@ -10,13 +10,11 @@ __global__ void myScatterKernel(uint32_t* in, uint32_t* scan, uint32_t* out, int
         if(in[i] == 0)
         {
             out[i - scan[i]] = in[i];
-            out[i - scan[i]] = 1;
         }
         // num0 = n - scan[n - 1] - in[n-1]
         else
         {
-            //out[n - scan[n - 1] - in[n - 1] + scan[i]] = in[i];
-            out[n - scan[n - 1] - in[n - 1] + scan[i]] = 1;
+            out[n - scan[n - 1] - in[n - 1] + scan[i]] = in[i];
         }
     }
 }
@@ -37,11 +35,6 @@ void MyScatter(const uint32_t* in, uint32_t *scan, uint32_t *out, int n, int blo
     myScatterKernel<<<gridSize, blockSize>>>(d_in, d_scan, d_out, n);
 
     cudaMemcpy(out, d_out, n*sizeof(uint32_t), cudaMemcpyDeviceToHost);
-
-    cout << "out ";
-    for(int i = 0;i < n;i++)
-        cout << out[i] << ' ';
-    cout << endl;
 
     cudaFree(d_scan), cudaFree(d_out), cudaFree(d_in);
 }
