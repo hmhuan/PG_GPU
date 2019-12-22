@@ -13,4 +13,4 @@ __global__ void postReductionPhase(int *d_in, int *d_out, int n);
 
 __global__ void addPhase(int *d_in, int *d_out, int n);
 
-void scan(const uint32_t *in, uint32_t* res,int n, int sizeBlock);
+void MyScan(const uint32_t *in, uint32_t* res,int n, int sizeBlock);

@@ -52,7 +52,7 @@ __global__ void addPhase(uint32_t *d_in, uint32_t *d_out, int n)
 		d_out[i] = d_in[i];
 }
 
-void scan(const uint32_t *in, uint32_t* res,int n, int sizeBlock)
+void MyScan(const uint32_t *in, uint32_t* res,int n, int sizeBlock)
 {
 	dim3 blockSize(sizeBlock);
 	dim3 gridSize((n - 1)/blockSize.x + 1);

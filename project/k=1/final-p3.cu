@@ -5,6 +5,7 @@
 #include <thrust/sort.h>
 #include <bits/stdc++.h>
 #include "myScan.h"
+#include "myScatter.h"
 
 using namespace std;
 
@@ -102,7 +103,7 @@ void sortByHost(const uint32_t * in, int n,
             int bin = (src[i] >> bit) & (nBins - 1);
             dst[histScan[bin]] = src[i];
             histScan[bin]++;
-        }    
+        }
 
     	// TODO: Swap "src" and "dst"
         uint32_t * temp = src;
@@ -124,11 +125,30 @@ void testSort(const uint32_t *in, int n, uint32_t *out, int nBits, int *blockSiz
 {
         // GpuTimer timer, timerOverall; 
     // timerOverall.Start();
+    //for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
+    {
+        uint32_t *scan = (uint32_t*)malloc(sizeof(uint32_t)*n);
+        // Scan
+        MyScan(in, scan, n, blockSizes[0]);
+        // scatter
+        MyScatter(in, scan, out, n, blockSizes[0]);
 
-    scan(in, out, n, blockSizes[0]);
-    for(int i = 0;i < n;i++)
-        cout << out[i] << ' ';
-    cout << endl;
+        for(int i = 0;i < n;i++)
+        {
+            cout << in[i] << ' ';
+        }
+        cout << endl;
+        for(int i = 0;i < n;i++)
+        {
+            cout << scan[i] << ' ';
+        }
+        cout << endl;
+        for(int i = 0;i < n;i++)
+        {
+            cout << out[i] << ' ';
+        }
+        cout << endl;
+    }
     // timerOverall.Stop();
     // printf("Time: %.3f ms\n", timerOverall.Elapsed());
 }
