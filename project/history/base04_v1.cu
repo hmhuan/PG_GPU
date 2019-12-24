@@ -52,65 +52,6 @@ struct GpuTimer
         return elapsed;
     }
 };
-
-// histogram kernel
-__global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, int bit)
-{
-    // TODO
-    // Each block computes its local hist using atomic on SMEM
-    //extern __shared__ int s_bin[];
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    //int delta = (nBins - 1) / blockDim.x + 1;
-    //for (int i = 0; i < delta; i++)
-    //{
-    //    int id = threadIdx.x + i * blockDim.x;
-    //    if (id < nBins)
-    //        s_bin[id] = 0;
-    //}
-    //__syncthreads();
-    if (i < n)
-    {
-        int bin = (in[i] >> bit) & (nBins - 1);
-        atomicAdd(&hist[bin], 1);
-    }
-    //__syncthreads();
-    // Each block adds its local hist to global hist using atomic on GMEM
-    //for (int i = 0; i < delta; i++)
-    //{
-    //    int id = threadIdx.x + i * blockDim.x;
-    //    if (id < nBins)
-    //        atomicAdd(&hist[id], s_bin[id]);
-    //}
-
-    
-}
-
-__global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
-{   
-    // TODO
-    extern __shared__ int s_data[];
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i > 0 && i < n)
-       s_data[threadIdx.x] = in[i - 1];
-    else
-       s_data[threadIdx.x] = 0;
-    __syncthreads();
-    
-    for (int stride = 1; stride < blockDim.x; stride *= 2)
-    {
-        int val = 0;
-        if (threadIdx.x >= stride)
-            val = s_data[threadIdx.x - stride];
-        __syncthreads();
-        s_data[threadIdx.x] += val;
-        __syncthreads();
-    }
-    if (i < n)
-        out[i] = s_data[threadIdx.x];
-    if (blkSums != NULL)
-        blkSums[blockIdx.x] = s_data[blockDim.x - 1];
-}
-
 void sortByHost(const uint32_t * in, int n,
                 uint32_t * out,
                 int nBits)
@@ -182,16 +123,10 @@ void sortRadixBase04(const uint32_t * in, int n,
     int nBins = 1 << nBits; // 2^nBits
     int * hist = (int *)malloc(nBins * gridSize.x * sizeof(int));
     int *histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
-
-
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
-    int * temp = (int *)malloc(nBins * gridSize.x * sizeof(int));
-
-    printf("gridSize = %d\n", gridSize.x);
-    printf("nBins = %d\n", nBins);
 
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
@@ -206,47 +141,18 @@ void sortRadixBase04(const uint32_t * in, int n,
                 hist[i * nBins + bin]++;
             }
         }
-        //printf("bit = %d\n", bit);
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", hist[i * nBins + j]);
-        //     printf("\n");
-        // }
-        // printf("\n");
-        //int k = 1;
-        //histScan[0] = 0;
+
+        // TODO: scan
         int pre = 0;
         for (int j = 0; j < nBins; j++){
             for (int i = 0; i < gridSize.x; i++)
             {
-                //histScan[k] = histScan[k - 1] + hist[i * nBins + j];
-                //temp[j + i * nBins] = pre + hist[i * nBins + j];//
-                histScan[i * nBins + j] = pre;//histScan[k - 1];
+                histScan[i * nBins + j] = pre;
                 pre = pre + hist[i * nBins + j];
-                //pre = temp[j + i * nBins];
-                //k++;
             }
         }
-        // print hist scan
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", histScan[j * gridSize.x + i]);
-        //     printf("\n");
-        // }
-        // printf("\n");
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", histScan[i * nBins + j]);
-        //     printf("\n");
-        // }
-        // printf("\n");
 
-        // for (int i = 0; i < nBins * gridSize.x; i++)
-        //     printf("%d ", temp[i]);
-        // printf("\n");
+        // TODO: Scatter
         for (int i = 0; i < gridSize.x; i++)
         {
             for (int j = 0; j < blkSize1.x; j++)
@@ -255,7 +161,6 @@ void sortRadixBase04(const uint32_t * in, int n,
                 if (id < n)
                 {
                     int bin = i * nBins + ((src[id] >> bit) & (nBins - 1));
-                    //hist[i * blkSize1.x + bin]++;
                     dst[histScan[bin]] = src[id];
                     histScan[bin]++;  // (neu cung bin thi ghi ben canh)
                 }
@@ -269,8 +174,6 @@ void sortRadixBase04(const uint32_t * in, int n,
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
     // Free memories
-    //free(blkSums);
-    free(temp);
     free(hist);
     free(histScan);
     free(originalSrc);
@@ -343,13 +246,12 @@ int main(int argc, char ** argv)
     printDeviceInfo();
 
 	// SET UP INPUT SIZE
-    //uint32_t in[] = {1, 3, 5, 2, 2, 1, 6, 7, 3, 4, 4, 7}; // just for demo
     int nBits = 8;
-    int n = (1 << 24) + 1;//sizeof(in) / sizeof(uint32_t); //;
+    int n = (1 << 24) + 1;
     if (argc > 1)
         nBits = atoi(argv[1]);
     printf("\nInput size: %d\n", n);
-
+    printf("nBits = %d\n", nBits);
     // ALLOCATE MEMORIES
     size_t bytes = n * sizeof(uint32_t);
     uint32_t * in = (uint32_t *)malloc(bytes);
@@ -358,9 +260,7 @@ int main(int argc, char ** argv)
 
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
-       in[i] = rand();
-    printf("n = %d\n", n);
-    //printArray(in, n);
+       in[i] = rand();    
 	
 	// DETERMINE BLOCK SIZES
     int blockSizes[2] = {512, 512}; // One for histogram, one for scan
@@ -373,9 +273,8 @@ int main(int argc, char ** argv)
 
     // SORT BY HOST
     sort(in, n, correctOut, nBits);
-    //printArray(correctOut, n);
+    // SORT BY BASE04
 	sort(in, n, out, nBits, true, blockSizes);
-    //printArray(out, n);
 	checkCorrectness(out, correctOut, n);
     // FREE MEMORIES 
     free(in);
