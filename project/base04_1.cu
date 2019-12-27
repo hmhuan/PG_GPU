@@ -134,77 +134,27 @@ void sortRadixBase04(const uint32_t * in, int n,
 
     //printf("gridSize = %d\n", gridSize.x);
     //printf("nBins = %d\n", nBins);
-
+    int nHist = nBins * gridSize.x;
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
-    	// TODO: Compute "hist" of the current digit
-        
+        // TODO: Compute "hist" of the current digit
         memset(hist, 0, nBins * gridSize.x * sizeof(int));
+        for (int i = 0; i < n; i++)
+        {
+            int bin = (src[i] >> bit) & (nBins - 1);
+            hist[bin * gridSize.x + i / blkSize1.x]++;
+        }
+        // TODO: Exclusive scan
+        histScan[0] = 0;
+        for (int i = 1; i < nHist; i++)
+            histScan[i] = histScan[i - 1] + hist[i - 1];
         
-        for (int i = 0; i < gridSize.x; i++)
+        // TODO: Scatter
+        for (int i = 0; i < n ; i++)
         {
-            for (int j = 0; j < blkSize1.x; j++)
-            if (i * blkSize1.x + j < n)
-            {
-                int bin = (src[i * blkSize1.x + j] >> bit) & (nBins - 1);
-                hist[i * nBins + bin]++;
-            }
-        }
-
-        //printf("bit = %d\n", bit);
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", hist[i * nBins + j]);
-        //     printf("\n");
-        // }
-        // printf("\n");
-        //int k = 1;
-        //histScan[0] = 0;
-        int pre = 0;
-        for (int j = 0; j < nBins; j++){
-            for (int i = 0; i < gridSize.x; i++)
-            {
-                //histScan[k] = histScan[k - 1] + hist[i * nBins + j];
-                //temp[j + i * nBins] = pre + hist[i * nBins + j];//
-                histScan[i * nBins + j] = pre;//histScan[k - 1];
-                pre = pre + hist[i * nBins + j];
-                //pre = temp[j + i * nBins];
-                //k++;
-            }
-        }
-        // print hist scan
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", histScan[j * gridSize.x + i]);
-        //     printf("\n");
-        // }
-        // printf("\n");
-        // for (int i = 0; i < gridSize.x; i++)
-        // {
-        //     for (int j = 0; j < nBins; j++)
-        //         printf("%d ", histScan[i * nBins + j]);
-        //     printf("\n");
-        // }
-        // printf("\n");
-
-        // for (int i = 0; i < nBins * gridSize.x; i++)
-        //     printf("%d ", temp[i]);
-        // printf("\n");
-        for (int i = 0; i < gridSize.x; i++)
-        {
-            for (int j = 0; j < blkSize1.x; j++)
-            {
-                int id = i * blkSize1.x + j;
-                if (id < n)
-                {
-                    int bin = i * nBins + ((src[id] >> bit) & (nBins - 1));
-                    //hist[i * blkSize1.x + bin]++;
-                    dst[histScan[bin]] = src[id];
-                    histScan[bin]++;  // (neu cung bin thi ghi ben canh)
-                }
-            }
+            int bin = i / blkSize1.x + ((src[i] >> bit) & (nBins - 1)) * gridSize.x;
+            dst[histScan[bin]] = src[i];
+            histScan[bin]++;
         }
         // TODO: Swap "src" and "dst"
         uint32_t * temp = src;
@@ -236,8 +186,10 @@ __global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, i
     //
     if (i < n)
     {
+        //int bin = (in[i] >> bit) & (nBins - 1);
+        //atomicAdd(&hist[blockIdx.x * nBins + bin], 1);
         int bin = (in[i] >> bit) & (nBins - 1);
-        atomicAdd(&hist[blockIdx.x * nBins + bin], 1);
+        atomicAdd(&hist[bin * gridDim.x + blockIdx.x]);
     }
     //__syncthreads();
     // Each block adds its local hist to global hist using atomic on GMEM
@@ -337,7 +289,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,
     {
     	// TODO: Compute "hist" of the current digit
         CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
-        // TODO: Initialize d_hist using cudaMemset
+        //TODO: Initialize d_hist using cudaMemset
         CHECK(cudaMemset(d_hist, 0, nBins * gridSize.x * sizeof(int)));
         computeHistKernel<<<gridSize, blkSize1>>>(d_src, n, d_hist, nBins, bit);
         cudaDeviceSynchronize();
