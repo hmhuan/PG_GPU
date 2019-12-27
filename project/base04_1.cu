@@ -53,64 +53,6 @@ struct GpuTimer
     }
 };
 
-// histogram kernel
-__global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, int bit)
-{
-    // TODO
-    // Each block computes its local hist using atomic on SMEM
-    //extern __shared__ int s_bin[];
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    //int delta = (nBins - 1) / blockDim.x + 1;
-    //for (int i = 0; i < delta; i++)
-    //{
-    //    int id = threadIdx.x + i * blockDim.x;
-    //    if (id < nBins)
-    //        s_bin[id] = 0;
-    //}
-    //__syncthreads();
-    if (i < n)
-    {
-        int bin = (in[i] >> bit) & (nBins - 1);
-        atomicAdd(&hist[bin], 1);
-    }
-    //__syncthreads();
-    // Each block adds its local hist to global hist using atomic on GMEM
-    //for (int i = 0; i < delta; i++)
-    //{
-    //    int id = threadIdx.x + i * blockDim.x;
-    //    if (id < nBins)
-    //        atomicAdd(&hist[id], s_bin[id]);
-    //}
-
-    
-}
-
-__global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
-{   
-    // TODO
-    extern __shared__ int s_data[];
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i > 0 && i < n)
-       s_data[threadIdx.x] = in[i - 1];
-    else
-       s_data[threadIdx.x] = 0;
-    __syncthreads();
-    
-    for (int stride = 1; stride < blockDim.x; stride *= 2)
-    {
-        int val = 0;
-        if (threadIdx.x >= stride)
-            val = s_data[threadIdx.x - stride];
-        __syncthreads();
-        s_data[threadIdx.x] += val;
-        __syncthreads();
-    }
-    if (i < n)
-        out[i] = s_data[threadIdx.x];
-    if (blkSums != NULL)
-        blkSums[blockIdx.x] = s_data[blockDim.x - 1];
-}
-
 void sortByHost(const uint32_t * in, int n,
                 uint32_t * out,
                 int nBits)
@@ -141,8 +83,7 @@ void sortByHost(const uint32_t * in, int n,
         {
             int bin = (src[i] >> bit) & (nBins - 1);
             hist[bin]++;
-        }
-
+        }   
     	// TODO: Scan "hist" (exclusively) and save the result to "histScan"
         histScan[0] = 0;
         for (int bin = 1; bin < nBins; bin++)
@@ -190,13 +131,16 @@ void sortRadixBase04(const uint32_t * in, int n,
     uint32_t * dst = out;
     int * temp = (int *)malloc(nBins * gridSize.x * sizeof(int));
 
-    printf("gridSize = %d\n", gridSize.x);
-    printf("nBins = %d\n", nBins);
+
+    //printf("gridSize = %d\n", gridSize.x);
+    //printf("nBins = %d\n", nBins);
 
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
     	// TODO: Compute "hist" of the current digit
+        
         memset(hist, 0, nBins * gridSize.x * sizeof(int));
+        
         for (int i = 0; i < gridSize.x; i++)
         {
             for (int j = 0; j < blkSize1.x; j++)
@@ -206,6 +150,7 @@ void sortRadixBase04(const uint32_t * in, int n,
                 hist[i * nBins + bin]++;
             }
         }
+
         //printf("bit = %d\n", bit);
         // for (int i = 0; i < gridSize.x; i++)
         // {
@@ -269,8 +214,188 @@ void sortRadixBase04(const uint32_t * in, int n,
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
     // Free memories
-    //free(blkSums);
     free(temp);
+    free(hist);
+    free(histScan);
+    free(originalSrc);
+}
+
+// histogram kernel
+__global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, int bit)
+{
+    // TODO
+    // Each block computes its local hist using atomic on SMEM
+    //extern __shared__ int s_bin[];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    //int delta = (nBins - 1) / blockDim.x + 1;
+    //for (int i = 0; i < delta; i++)
+    //{
+    //    int id = threadIdx.x + i * blockDim.x;
+    //    if (id < nBins)
+    //        s_bin[id] = 0;
+    //
+    if (i < n)
+    {
+        int bin = (in[i] >> bit) & (nBins - 1);
+        atomicAdd(&hist[blockIdx.x * nBins + bin], 1);
+    }
+    //__syncthreads();
+    // Each block adds its local hist to global hist using atomic on GMEM
+    //for (int i = 0; i < delta; i++)
+    //{
+    //    int id = threadIdx.x + i * blockDim.x;
+    //    if (id < nBins)
+    //        atomicAdd(&hist[id], s_bin[id]);
+    //}
+
+    
+}
+
+__global__ void scanBlkKernel(int * in, int n, int nBins,int * out, int * blkSums)
+{   
+    // TODO
+    extern __shared__ int s_data[];
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (i > 0 && i < n)
+       s_data[threadIdx.x] = in[(i - 1) % blockDim.x * nBins + threadIdx.x]; //i - 1
+    else
+       s_data[threadIdx.x] = 0;
+    __syncthreads();
+    
+    if (threadIdx.x < nBins)
+    {
+        s_data[threadIdx.x] = in[blockIdx.x * nBins + threadIdx.x];
+    }
+    __syncthreads();
+
+    
+    for (int stride = 1; stride < blockDim.x; stride *= 2)
+    {
+        int val = 0;
+        if (threadIdx.x >= stride)
+            val = s_data[threadIdx.x - stride];
+        __syncthreads();
+        s_data[threadIdx.x] += val;
+        __syncthreads();
+    }
+    if (i < n)
+        out[i] = s_data[threadIdx.x];
+    if (blkSums != NULL)
+        blkSums[blockIdx.x] = s_data[blockDim.x - 1];
+}
+
+__global__ void scatter(uint32_t * in, int bit, int *histScan, int n, int nBins, uint32_t *out)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n)
+    {
+        int bin = ((in[i] >> bit) & (nBins - 1));
+        int val = histScan[blockIdx.x * nBins + bin];
+        atomicAdd(&histScan[blockIdx.x * nBins + bin], 1);
+        out[val] = in[i];
+        //histScan[bin]++;  // (neu cung bin thi ghi ben canh)
+        //atomicAdd(&histScan[blockIdx.x * nBins + bin], 1);
+        // int bin = i * nBins + ((src[id] >> bit) & (nBins - 1));
+        //             //hist[i * blkSize1.x + bin]++;
+        //             dst[histScan[bin]] = src[id];
+        //             histScan[bin]++;  // (neu cung bin thi ghi ben canh)
+    }
+}
+
+void sortRadixBase04_1(const uint32_t * in, int n, 
+        uint32_t * out, 
+        int nBits, int * blockSizes)
+{
+
+    dim3 blkSize1(blockSizes[0]); // block size for histogram kernel
+    dim3 blkSize2(blockSizes[1]); // block size for scan kernel
+    dim3 gridSize((n - 1) / blkSize1.x + 1); // grid size for histogram kernel 
+    // TODO
+    int nBins = 1 << nBits; // 2^nBits
+    int * hist = (int *)malloc(nBins * gridSize.x * sizeof(int));
+    int *histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
+
+
+    uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
+    memcpy(src, in, n * sizeof(uint32_t));
+    uint32_t * originalSrc = src; // Use originalSrc to free memory later
+    uint32_t * dst = out;
+
+    uint32_t * d_src, *d_dst;
+    int *d_hist, *d_histScan;
+
+    CHECK(cudaMalloc(&d_src, n * sizeof(uint32_t)));
+    CHECK(cudaMalloc(&d_dst, n * sizeof(uint32_t)));
+	CHECK(cudaMalloc(&d_hist, nBins * gridSize.x * sizeof(int)));
+	CHECK(cudaMalloc(&d_histScan, nBins * gridSize.x * sizeof(int)));
+
+    //CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
+
+    for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
+    {
+    	// TODO: Compute "hist" of the current digit
+        CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
+        // TODO: Initialize d_hist using cudaMemset
+        CHECK(cudaMemset(d_hist, 0, nBins * gridSize.x * sizeof(int)));
+        computeHistKernel<<<gridSize, blkSize1>>>(d_src, n, d_hist, nBins, bit);
+        cudaDeviceSynchronize();
+	    CHECK(cudaGetLastError());
+        CHECK(cudaMemcpy(hist, d_hist, nBins * gridSize.x * sizeof(int), cudaMemcpyDeviceToHost)); 
+
+        // Scan
+        int pre = 0;
+        for (int j = 0; j < nBins; j++)
+        {    
+            for (int i = 0; i < gridSize.x; i++)        
+            {
+                //histScan[k] = histScan[k - 1] + hist[i * nBins + j];
+                //temp[j + i * nBins] = pre + hist[i * nBins + j];//
+                histScan[i * nBins + j] = pre;//histScan[k - 1];
+                pre = pre + hist[i * nBins + j];
+                //pre = temp[j + i * nBins];
+                //k++;
+            }
+        }
+        //CHECK(cudaMemcpy(d_histScan, histScan, nBins * gridSize.x * sizeof(int), cudaMemcpyHostToDevice));
+        //scatter<<<gridSize, blkSize1>>>(d_src, bit, d_histScan, n, nBins, d_dst);
+        int id = 0;
+        for (int i = 0; i < gridSize.x; i++)
+        {
+            for (int j = 0; j < blkSize1.x; j++)
+            {
+                id = i * blkSize1.x + j;
+                if (id < n)
+                {
+                    int bin = i * nBins + ((src[id] >> bit) & (nBins - 1));
+                    //hist[i * blkSize1.x + bin]++;
+                    dst[histScan[bin]] = src[id];
+                    histScan[bin]++;  // (neu cung bin thi ghi ben canh)
+                }
+                else
+                {
+                    break;
+                }
+                if (id >= n)
+                    break;
+            }
+        }
+        // TODO: Swap "src" and "dst"
+        uint32_t * d_temp = src;
+        src = dst;
+        dst = d_temp; 
+    }
+    // TODO: Copy result to "out"
+    memcpy(out, src, n * sizeof(uint32_t));
+    //CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    // Free memories
+    CHECK(cudaFree(d_src));
+    CHECK(cudaFree(d_dst));
+    CHECK(cudaFree(d_hist));
+    CHECK(cudaFree(d_histScan));
+    
+    //free(blkSums);
     free(hist);
     free(histScan);
     free(originalSrc);
@@ -279,22 +404,26 @@ void sortRadixBase04(const uint32_t * in, int n,
 void sort(const uint32_t * in, int n, 
         uint32_t * out, 
         int nBits,
-        bool useDevice=false, int * blockSizes=NULL)
+        int useDevice=0, int * blockSizes=NULL)
 {
     GpuTimer timer; 
     timer.Start();
 
-    if (useDevice == false)
+    if (useDevice == 0)
     {
     	printf("\nRadix sort by host\n");
         sortByHost(in, n, out, nBits);
     }
-    else 
+    else if (useDevice == 1)
     {
-    	printf("\nRadix sort by device\n");
+    	printf("\nRadix sort by  host level 1\n");
         sortRadixBase04(in, n, out, nBits, blockSizes);
     }
-
+    else 
+    {
+        printf("\nRadix sort by device\n");
+        sortRadixBase04_1(in, n, out, nBits, blockSizes);
+    }
     timer.Stop();
     printf("Time: %.3f ms\n", timer.Elapsed());
 }
@@ -353,13 +482,13 @@ int main(int argc, char ** argv)
     // ALLOCATE MEMORIES
     size_t bytes = n * sizeof(uint32_t);
     uint32_t * in = (uint32_t *)malloc(bytes);
-    uint32_t * out = (uint32_t *)malloc(bytes); // Device result
+    uint32_t * out_0 = (uint32_t *)malloc(bytes); // base 4 host result
+    uint32_t * out_1 = (uint32_t *)malloc(bytes); // base 4 Device result
     uint32_t * correctOut = (uint32_t *)malloc(bytes); // Host result
 
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
-       in[i] = rand();
-    printf("n = %d\n", n);
+       in[i] = rand() % 100;
     //printArray(in, n);
 	
 	// DETERMINE BLOCK SIZES
@@ -374,12 +503,16 @@ int main(int argc, char ** argv)
     // SORT BY HOST
     sort(in, n, correctOut, nBits);
     //printArray(correctOut, n);
-	sort(in, n, out, nBits, true, blockSizes);
-    //printArray(out, n);
-	checkCorrectness(out, correctOut, n);
+	sort(in, n, out_0, nBits, 1, blockSizes);
+	checkCorrectness(out_0, correctOut, n);
+
+	sort(in, n, out_1, nBits, 2, blockSizes);
+	checkCorrectness(out_1, correctOut, n);
+    //printArray(out_1, n);
     // FREE MEMORIES 
     free(in);
-    free(out);
+    free(out_0);
+    free(out_1);
     free(correctOut);
     
     return EXIT_SUCCESS;
