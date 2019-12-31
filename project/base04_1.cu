@@ -164,13 +164,12 @@ __global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, i
     // Each block computes its local hist using atomic on SMEM
     extern __shared__ int s_bin[];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (threadIdx.x < nBins)
-        s_bin[threadIdx.x] = 0;
+    
+    s_bin[threadIdx.x] = 0;
     __syncthreads();
-    int bin = -1;
     if (i < n)
     {
-        bin = (in[i] >> bit) & (nBins - 1);
+        int bin = (in[i] >> bit) & (nBins - 1);
         //atomicAdd(&hist[bin * gridDim.x + blockIdx.x], 1);
         atomicAdd(&s_bin[bin], 1);
     }
@@ -330,8 +329,6 @@ void sortRadixBase04_1(const uint32_t * in, int n,
     dim3 blkSize2(blockSizes[1]); // block size for scan kernel
     dim3 gridSize1((n - 1) / blkSize1.x + 1); // grid size for histogram kernel 
     dim3 gridSize2((nBins * gridSize1.x - 1) / blkSize2.x + 1);
-    //int size = gridSize2.x;
-    //dim3 gridSize3((size - 1) / blkSize2.x + 1);
 
     // TODO: initialize
     int * scan = (int * )malloc(nBins * gridSize1.x * sizeof(int));
@@ -357,9 +354,8 @@ void sortRadixBase04_1(const uint32_t * in, int n,
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
     	// TODO: Compute "hist" of the current digit
-        // TODO: Initialize d_hist using cudaMemset
         CHECK(cudaMemset(d_scan, 0, nBins * gridSize1.x * sizeof(int)));
-        computeHistKernel<<<gridSize1, blkSize1, sMemSize1>>>(d_src, n, d_scan, nBins, bit);
+        computeHistKernel<<<gridSize1, blkSize1, blkSize1.x * sizeof(int)>>>(d_src, n, d_scan, nBins, bit);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
 
@@ -429,12 +425,12 @@ void sort(const uint32_t * in, int n,
     }
     else if (useDevice == 1)
     {
-    	printf("\nRadix sort by  host level 1\n");
+    	printf("\nRadix sort by host level 1\n");
         sortRadixBase04(in, n, out, nBits, blockSizes);
     }
     else 
     {
-        printf("\nRadix sort by device\n");
+        printf("\nRadix sort by device level 2\n");
         sortRadixBase04_1(in, n, out, nBits, blockSizes);
     }
     timer.Stop();
