@@ -60,6 +60,33 @@ __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
     extern __shared__ int s_data[];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i > 0 && i < n)
+        s_data[blockDim.x - 1 - threadIdx.x] = in[i - 1];
+    else
+        s_data[blockDim.x - 1 - threadIdx.x] = 0;
+    __syncthreads();
+    
+    for (int stride = 1; stride < blockDim.x; stride *= 2)
+    {
+        int val = 0;
+        if (threadIdx.x < blockDim.x - stride)
+            val = s_data[threadIdx.x + stride];
+        __syncthreads();
+        s_data[threadIdx.x] += val;
+        __syncthreads();
+    }
+
+    if (i < n)
+        out[i] = s_data[blockDim.x - 1 - threadIdx.x];
+    if (blkSums != NULL)
+        blkSums[blockIdx.x] = s_data[0];
+}
+
+__global__ void scanBlkKernel_2(int * in, int n, int * out, int * blkSums)
+{   
+    // TODO
+    extern __shared__ int s_data[];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i > 0 && i < n)
         s_data[threadIdx.x] = in[i - 1];
     else
         s_data[threadIdx.x] = 0;
@@ -74,26 +101,30 @@ __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums)
         s_data[threadIdx.x] += val;
         __syncthreads();
     }
+
     if (i < n)
-        out[i] = s_data[threadIdx.x];
+        out[i] = s_data[ threadIdx.x];
     if (blkSums != NULL)
         blkSums[blockIdx.x] = s_data[blockDim.x - 1];
 }
+
 void printArray(int * a, int n)
 {
     for (int i = 0; i < n; i++)
         printf("%i ", a[i]);
     printf("\n");
 }
+
 __global__ void scanBlkKernel_1(int * in, int n, int * out, int * blkSums)
 {   
     // TODO
     extern __shared__ int s_data[];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i > 0 && i < n)
-        s_data[threadIdx.x] = in[i - 1];
+        s_data[blockDim.x - 1 - threadIdx.x] = in[i - 1];
     else
-        s_data[threadIdx.x] = 0;
+        s_data[blockDim.x - 1 - threadIdx.x] = 0;
+    
     __syncthreads();
     int stride = 1;
     // TODO: Reduction phase
@@ -129,11 +160,11 @@ __global__ void addBlkSums(int * in, int n, int* blkSums)
         in[i] += blkSums[blockIdx.x - 1];
 }
 void scan(int * in, int n, int * out,  
-        bool useDevice=false, dim3 blkSize=dim3(1))
+        int useDevice=0, dim3 blkSize=dim3(1))
 {
     GpuTimer timer; 
     timer.Start();
-    if (useDevice == false)
+    if (useDevice == 0)
     {
     	printf("\nScan by host\n");
 		out[0] = 0;
@@ -142,9 +173,9 @@ void scan(int * in, int n, int * out,
 	    	out[i] = out[i - 1] + in[i - 1];
 	    }
     }
-    else // Use device
+    else if (useDevice == 1)// Use device
     {
-    	printf("\nScan by device\n");
+    	printf("\nScan by device 1\n");
         // TODO
         int * d_in, *d_out, *d_blkSums;
         dim3 gridSize((n - 1) / blkSize.x + 1);
@@ -158,7 +189,44 @@ void scan(int * in, int n, int * out,
         CHECK(cudaMemcpy(d_in, in, n * sizeof(int), cudaMemcpyHostToDevice));
 
         size_t sMemSize = blkSize.x * sizeof(int);
-        scanBlkKernel_1<<<gridSize, blkSize, sMemSize>>>(d_in, n, d_out, d_blkSums);
+        scanBlkKernel<<<gridSize, blkSize, sMemSize>>>(d_in, n, d_out, d_blkSums);
+        cudaDeviceSynchronize();
+		CHECK(cudaGetLastError());
+
+        CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize.x * sizeof(int), cudaMemcpyDeviceToHost));
+        for (int i = 1; i < gridSize.x; i++)
+        {
+            blkSums[i] += blkSums[i-1];
+        }
+        CHECK(cudaMemcpy(d_blkSums, blkSums, gridSize.x * sizeof(int), cudaMemcpyHostToDevice));
+        addBlkSums<<<gridSize, blkSize>>>(d_out, n, d_blkSums);
+        cudaDeviceSynchronize();
+		CHECK(cudaGetLastError());
+        
+        CHECK(cudaMemcpy(out, d_out, n * sizeof(int), cudaMemcpyDeviceToHost));
+
+        CHECK(cudaFree(d_blkSums));
+        CHECK(cudaFree(d_in));
+		CHECK(cudaFree(d_out));
+        free(blkSums);
+	}
+    else 
+    {
+    	printf("\nScan by device 2\n");
+        // TODO
+        int * d_in, *d_out, *d_blkSums;
+        dim3 gridSize((n - 1) / blkSize.x + 1);
+        int * blkSums;
+        blkSums = (int*)malloc( gridSize.x * sizeof(int));
+        
+        CHECK(cudaMalloc(&d_in, n * sizeof(int)));
+		CHECK(cudaMalloc(&d_out, n * sizeof(int)));
+        CHECK(cudaMalloc(&d_blkSums, gridSize.x * sizeof(int)));
+
+        CHECK(cudaMemcpy(d_in, in, n * sizeof(int), cudaMemcpyHostToDevice));
+
+        size_t sMemSize = blkSize.x * sizeof(int);
+        scanBlkKernel_2<<<gridSize, blkSize, sMemSize>>>(d_in, n, d_out, d_blkSums);
         cudaDeviceSynchronize();
 		CHECK(cudaGetLastError());
 
@@ -218,7 +286,7 @@ int main(int argc, char ** argv)
     printDeviceInfo();
 
     // SET UP INPUT SIZE
-    int n = (1 << 24) + 1;
+    int n = (1 << 27) + 1;
     printf("\nInput size: %d\n", n);
 
     // ALLOCATE MEMORIES
@@ -226,6 +294,7 @@ int main(int argc, char ** argv)
     int * in = (int *)malloc(bytes);
     //int in[11] = {1, 2, 3, 4, 5, 6, 7, 8, 9 , 10 , 11}; n = 11;
     int * out = (int *)malloc(bytes); // Device result
+    int * out1 = (int *)malloc(bytes); // Device result
     int * correctOut = (int *)malloc(bytes); // Host result
 
     // SET UP INPUT DATA
@@ -242,15 +311,18 @@ int main(int argc, char ** argv)
     // SCAN BY HOST
     scan(in, n, correctOut);
     // SCAN BY DEVICE
-    scan(in, n, out, true, blockSize);
+    scan(in, n, out, 1, blockSize);
     //printArray(correctOut, n);
     //printArray(out, n);
 
     checkCorrectness(out, correctOut, n);
+    scan(in, n, out1, 2, blockSize);
+    checkCorrectness(out1, correctOut, n);
 
     // FREE MEMORIES
     free(in);
     free(out);
+    free(out1);
     free(correctOut);
     
     return EXIT_SUCCESS;
