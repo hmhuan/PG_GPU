@@ -356,6 +356,8 @@ __global__ void scatter(uint32_t * in, int * preRank, int bit,
     }
 }
 
+// TODO: Gộp 2 hàm này lại có vẻ ổn.
+
 void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, int * blockSizes)
 {
     int nBins = 1 << nBits; // 2^nBits
@@ -370,7 +372,6 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
-    //uint32_t * dst = out;
 
     uint32_t * d_src, *d_dst;
     int *d_scan, *d_blkSums, * d_preRank; 
@@ -407,7 +408,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
         addBlkSums<<<gridSize2, blkSize2>>>(d_scan, nBins * gridSize1.x, d_blkSums);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(scan, d_scan, sizeof(int)* nBins * gridSize1.x, cudaMemcpyDeviceToHost));
+        //CHECK(cudaMemcpy(scan, d_scan, sizeof(int)* nBins * gridSize1.x, cudaMemcpyDeviceToHost));
 
         // TODO: Scatter
         preScatter<<<gridSize1, blkSize1, (blkSize1.x * 7 * sizeof(int))>>>(d_src, n, nBits, bit, nBins, d_preRank);
