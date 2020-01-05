@@ -280,15 +280,15 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
     // TODO: B1 - sort radix with k = 1
     for (int b = 0; b < nBits; b++)
     {
-        // compute hist and scan
+        // compute hist
         hist[threadIdx.x] = (s_hist[threadIdx.x] >> b) & 1;
         __syncthreads();
+        // scan
         if (threadIdx.x == 0)
             scan[0] = 0;
         else
             scan[threadIdx.x] = hist[threadIdx.x - 1];
         __syncthreads();
-        // scan
         for (int stride = 1; stride < blockDim.x; stride *= 2)
         {
             int val = 0;
@@ -299,7 +299,7 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
             __syncthreads();
         }
         __syncthreads();
-
+        // scatter
         int nZeros = blockDim.x - scan[blockDim.x - 1] - hist[blockDim.x - 1];
         int rank = 0;
         if (hist[threadIdx.x] == 0)
@@ -309,7 +309,7 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
         dst[rank] = s_hist[threadIdx.x];
         dst_ori[rank] = s_in[threadIdx.x];
         __syncthreads();        
-        // copy
+        // copy or swap
         s_hist[threadIdx.x] = dst[threadIdx.x];
         s_in[threadIdx.x] = dst_ori[threadIdx.x];
         // if (threadIdx.x == 0)
@@ -321,7 +321,7 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
         //     s_in = dst_ori; 
         //     dst_ori = temp; 
         // }
-       __syncthreads();
+       //__syncthreads();
     }
     __syncthreads();
     // TODO: B2
@@ -527,7 +527,7 @@ int main(int argc, char ** argv)
     if (argc > 1)
         nBits = atoi(argv[1]);
     printf("\nInput size: %d\n", n);
-
+    printf("nBits: %d\n", nBits);
     // ALLOCATE MEMORIES
     size_t bytes = n * sizeof(uint32_t);
     uint32_t * in = (uint32_t *)malloc(bytes);
@@ -554,8 +554,8 @@ int main(int argc, char ** argv)
 
 	sort(in, n, out_0, nBits, 1, blockSizes);
 	checkCorrectness(out_0, correctOut, n);
-
-	sort(in, n, out_1, nBits, 2, blockSizes);
+    
+    sort(in, n, out_1, nBits, 2, blockSizes);
 	checkCorrectness(out_1, correctOut, n);
 
     // SORT BY DEVICE by thrust
