@@ -296,7 +296,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
     dim3 gridSize2((nBins * gridSize1.x - 1) / blkSize2.x + 1);
 
     // TODO: initialize
-    int * scan = (int * )malloc(nBins * gridSize1.x * sizeof(int));
+    //int * scan = (int * )malloc(nBins * gridSize1.x * sizeof(int));
     int * blkSums = (int *)malloc(gridSize2.x * sizeof(int));
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
@@ -330,7 +330,6 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
         for (int i = 1; i < gridSize2.x; i++)
             blkSums[i] += blkSums[i - 1];        
         CHECK(cudaMemcpy(d_blkSums, blkSums, gridSize2.x * sizeof(int), cudaMemcpyHostToDevice));
-        
         addBlkSums<<<gridSize2, blkSize2>>>(d_scan, nBins * gridSize1.x, d_blkSums);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
@@ -354,7 +353,6 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
     CHECK(cudaFree(d_blkSums));
     
     free(blkSums);
-    free(scan);
     free(originalSrc);
 }
 
@@ -479,8 +477,8 @@ int main(int argc, char ** argv)
 	checkCorrectness(out_1, correctOut, n);
 
     // SORT BY DEVICE by thrust
-    sort(in, n, out_thrust, nBits, 3, blockSizes);
-    checkCorrectness(out_thrust, correctOut, n);
+    //sort(in, n, out_thrust, nBits, 3, blockSizes);
+    //checkCorrectness(out_thrust, correctOut, n);
 
     // FREE MEMORIES 
     free(in);
