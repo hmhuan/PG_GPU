@@ -477,8 +477,8 @@ int main(int argc, char ** argv)
 	checkCorrectness(out_1, correctOut, n);
 
     // SORT BY DEVICE by thrust
-    //sort(in, n, out_thrust, nBits, 3, blockSizes);
-    //checkCorrectness(out_thrust, correctOut, n);
+    sort(in, n, out_thrust, nBits, 3, blockSizes);
+    checkCorrectness(out_thrust, correctOut, n);
 
     // FREE MEMORIES 
     free(in);
