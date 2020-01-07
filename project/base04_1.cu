@@ -265,7 +265,6 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
     int *startIndex = (int *)&dst_ori[blockDim.x];
     int * hist = (int *)&startIndex[blockDim.x];
     int * scan = (int *)&hist[blockDim.x];
-    //int * temp = (int *)&scan[blockDim.x];
 
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id < n)
@@ -313,14 +312,14 @@ __global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, 
         s_in[threadIdx.x] = dst_ori[threadIdx.x];
         // if (threadIdx.x == 0)
         // {
-        //     temp = s_hist; 
-        //     s_hist = dst; 
-        //     dst = temp;
-        //     temp = s_in; 
-        //     s_in = dst_ori; 
-        //     dst_ori = temp; 
+        //     temp = &s_hist[0]; 
+        //     s_hist = &dst[0]; 
+        //     dst = &temp[0];
+        //     temp = &s_in[0]; 
+        //     s_in = &dst_ori[0]; 
+        //     dst_ori = &temp[0]; 
         // }
-       //__syncthreads();
+        //__syncthreads();
     }
     __syncthreads();
     // TODO: B2
@@ -365,6 +364,7 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
     int *startIndex = (int *)&dst_ori[blockDim.x];
     int * hist = (int *)&startIndex[blockDim.x];
     int * scan = (int *)&hist[blockDim.x];
+    //int * temp = (int *)&scan[blockDim.x];
 
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
@@ -411,6 +411,16 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
         // copy or swap
         s_hist[threadIdx.x] = dst[threadIdx.x];
         s_in[threadIdx.x] = dst_ori[threadIdx.x];
+    //    if (threadIdx.x == 0)
+    //     {
+    //         int * temp = &s_hist[0]; 
+    //         s_hist = &dst[0]; 
+    //         dst = temp;
+    //         temp = &s_in[0]; 
+    //         s_in = &dst_ori[0]; 
+    //         dst_ori = temp; 
+    //     }
+    //     __syncthreads();
     }
     __syncthreads();
     // TODO: B2
@@ -477,7 +487,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
 	    CHECK(cudaGetLastError());
 
         // TODO: Scatter
-        Scatter<<<gridSize1, blkSize1, (blkSize1.x * 7 * sizeof(int))>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
+        Scatter<<<gridSize1, blkSize1, (blkSize1.x * 7 + 1)* sizeof(int)>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
         
@@ -610,15 +620,15 @@ int main(int argc, char ** argv)
     // SORT BY HOST
     sort(in, n, correctOut, nBits);
 
-	//sort(in, n, out_0, nBits, 1, blockSizes);
-	//checkCorrectness(out_0, correctOut, n);
+	sort(in, n, out_0, nBits, 1, blockSizes);
+	checkCorrectness(out_0, correctOut, n);
     
     sort(in, n, out_1, nBits, 2, blockSizes);
 	checkCorrectness(out_1, correctOut, n);
 
     // SORT BY DEVICE by thrust
-    //sort(in, n, out_thrust, nBits, 3, blockSizes);
-    //checkCorrectness(out_thrust, correctOut, n);
+    sort(in, n, out_thrust, nBits, 3, blockSizes);
+    checkCorrectness(out_thrust, correctOut, n);
 
     // FREE MEMORIES 
     free(in);
