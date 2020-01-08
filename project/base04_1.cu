@@ -164,8 +164,15 @@ __global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, i
     // Each block computes its local hist using atomic on SMEM
     extern __shared__ int s_bin[];
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    s_bin[threadIdx.x] = 0;
+    int delta = (nBins - 1) / blockDim.x + 1;
+
+    for (int j = 0; j < delta; j++)
+    {
+        int id = threadIdx.x + j * blockDim.x;
+        if (id < nBins)
+            s_bin[id] = 0;
+    }
+    //s_bin[threadIdx.x] = 0;
     __syncthreads();
     if (i < n)
     {
@@ -174,8 +181,14 @@ __global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, i
         atomicAdd(&s_bin[bin], 1);
     }
     __syncthreads();
-    if (threadIdx.x < nBins)
-        hist[threadIdx.x * gridDim.x + blockIdx.x] += s_bin[threadIdx.x];
+    //if (threadIdx.x < nBins)
+     //  hist[threadIdx.x * gridDim.x + blockIdx.x] = s_bin[threadIdx.x];
+    for (int j = 0; j < delta; j++)
+    {
+        int id = threadIdx.x + j * blockDim.x;
+        if (id < nBins)
+            hist[id * gridDim.x + blockIdx.x] += s_bin[id];
+    }
 }
        
 __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums, int mode = 1)
@@ -202,156 +215,11 @@ __global__ void scanBlkKernel(int * in, int n, int * out, int * blkSums, int mod
         blkSums[blockIdx.x] = s_data[0];
 }
 
-// __global__ void scanBlkKernel_1(int * in, int n, int * out, int * blkSums)
-// {   
-//     // TODO
-//     extern __shared__ int s_data[];
-//     int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-//     if (i > 0 && i < n)
-//         s_data[blockDim.x - 1 - threadIdx.x] = in[i - 1];
-//     else
-//         s_data[threadIdx.x] = 0;
-//     __syncthreads();
-//     int stride = 1;
-//     //int k = threadIdx.x * 2;
-//     // TODO: Reduction phase
-//     while (stride * 2 < blockDim.x)
-//     {
-//         if (threadIdx.x < blockDim.x / (stride * 2))
-//         {
-//             s_data[(threadIdx.x * stride)] += s_data[(threadIdx.x + 1) * stride];
-//         }
-//         //if (threadIdx.x >= stride && (threadIdx.x + 1) % (stride * 2) == 0)
-//         //    s_data[threadIdx.x] += s_data[threadIdx.x - stride]; 
-//         __syncthreads();
-//         stride *= 2;
-//     }
-//     __syncthreads();
-//     // TODO: Post-reduction phase
-//     while(stride > 0)
-//     {
-//         stride /= 2;
-//         if (threadIdx.x < blockDim.x / (stride * 2))
-//         {
-//             s_data[threadIdx.x * stride + stride / 2] += s_data[threadIdx.x * stride  + stride];
-//         }
-//         //if (threadIdx.x + stride < blockDim.x && (threadIdx.x + 1) % (stride * 2) == 0)
-//         //    s_data[threadIdx.x + stride] += s_data[threadIdx.x];
-//         __syncthreads();
-//     }
-//     __syncthreads();
-//     // TODO: blockSums save
-//     if (i < n)
-//         out[i] = s_data[blockDim.x - 1  - threadIdx.x];
-//     if (blkSums != NULL)
-//         blkSums[blockIdx.x] = s_data[0];
-// }
-
 __global__ void addBlkSums(int * in, int n, int* blkSums)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n && blockIdx.x > 0)
         in[i] += blkSums[blockIdx.x - 1];
-}
-
-__global__ void preScatter(uint32_t * in, int n, int nBits, int bit, int nBins, int * out)
-{
-    extern __shared__ int s_data[];
-    int * s_in = s_data;
-    int * s_hist = (int *)&s_in[blockDim.x];
-    int *dst = (int *)&s_hist[blockDim.x];
-    int *dst_ori = (int *)&dst[blockDim.x];
-    int *startIndex = (int *)&dst_ori[blockDim.x];
-    int * hist = (int *)&startIndex[blockDim.x];
-    int * scan = (int *)&hist[blockDim.x];
-
-    int id = blockIdx.x * blockDim.x + threadIdx.x;
-    if (id < n)
-    {
-        s_in[threadIdx.x] = in[id];
-        s_hist[threadIdx.x] = (s_in[threadIdx.x] >> bit) & (nBins - 1); // get bit
-    }
-    else 
-        s_hist[threadIdx.x] = nBins - 1;
-    __syncthreads();
-    // TODO: B1 - sort radix with k = 1
-    for (int b = 0; b < nBits; b++)
-    {
-        // compute hist
-        hist[threadIdx.x] = (s_hist[threadIdx.x] >> b) & 1;
-        __syncthreads();
-        // scan
-        if (threadIdx.x == 0)
-            scan[0] = 0;
-        else
-            scan[threadIdx.x] = hist[threadIdx.x - 1];
-        __syncthreads();
-        for (int stride = 1; stride < blockDim.x; stride *= 2)
-        {
-            int val = 0;
-            if (threadIdx.x >= stride)
-                val = scan[threadIdx.x - stride];
-            __syncthreads();
-            scan[threadIdx.x] += val;
-            __syncthreads();
-        }
-        __syncthreads();
-        // scatter
-        int nZeros = blockDim.x - scan[blockDim.x - 1] - hist[blockDim.x - 1];
-        int rank = 0;
-        if (hist[threadIdx.x] == 0)
-            rank = threadIdx.x - scan[threadIdx.x];
-        else
-            rank = nZeros + scan[threadIdx.x];
-        dst[rank] = s_hist[threadIdx.x];
-        dst_ori[rank] = s_in[threadIdx.x];
-        __syncthreads();        
-        // copy or swap
-        s_hist[threadIdx.x] = dst[threadIdx.x];
-        s_in[threadIdx.x] = dst_ori[threadIdx.x];
-        // if (threadIdx.x == 0)
-        // {
-        //     temp = &s_hist[0]; 
-        //     s_hist = &dst[0]; 
-        //     dst = &temp[0];
-        //     temp = &s_in[0]; 
-        //     s_in = &dst_ori[0]; 
-        //     dst_ori = &temp[0]; 
-        // }
-        //__syncthreads();
-    }
-    __syncthreads();
-    // TODO: B2
-    if (threadIdx.x == 0)
-    {
-        startIndex[s_hist[0]] = 0;
-    }
-    else
-    {
-        if (s_hist[threadIdx.x] != s_hist[threadIdx.x - 1])
-            startIndex[s_hist[threadIdx.x]] = threadIdx.x;
-    }
-    __syncthreads();
-    // TODO: B3
-    if (id < n)
-    {
-        out[id] = threadIdx.x - startIndex[s_hist[threadIdx.x]];
-        in[id] = s_in[threadIdx.x];
-    }
-}
-
-__global__ void scatter(uint32_t * in, int * preRank, int bit, 
-                        int *histScan, int n, int nBins, uint32_t *out)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n)
-    {
-        int bin = ((in[i] >> bit) & (nBins - 1));
-        int scan = histScan[bin * gridDim.x + blockIdx.x];
-        int rank = scan + preRank[i];
-        out[rank] = in[i];
-    }
 }
 
 __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int *histScan, uint32_t * out)
@@ -362,32 +230,32 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
     int *dst = (int *)&s_hist[blockDim.x];
     int *dst_ori = (int *)&dst[blockDim.x];
     int *startIndex = (int *)&dst_ori[blockDim.x];
-    int * hist = (int *)&startIndex[blockDim.x];
-    int * scan = (int *)&hist[blockDim.x];
-    //int * temp = (int *)&scan[blockDim.x];
+    int * scan = (int *)&startIndex[nBins];
+    int * hist = (int *)&scan[blockDim.x];
 
     int id = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (id < n)
     {
         s_in[threadIdx.x] = in[id];
-        s_hist[threadIdx.x] = (s_in[threadIdx.x] >> bit) & (nBins - 1); // get bit
+        s_hist[threadIdx.x] = (s_in[threadIdx.x] >> bit) & (nBins - 1);
     }
     else 
         s_hist[threadIdx.x] = nBins - 1;
-    //__syncthreads();
     // TODO: B1 - sort radix with k = 1
     for (int b = 0; b < nBits; b++)
     {
         // compute hist
-        hist[threadIdx.x] = (s_hist[threadIdx.x] >> b) & 1;
-        __syncthreads();
-        // scan
-        if (threadIdx.x == 0)
-            scan[0] = 0;
+        int _hist = s_hist[threadIdx.x];
+        int _in = s_in[threadIdx.x];
+        int _h = (_hist >> b) & 1;
+        hist[threadIdx.x] = _h;//(_hist >> b) & 1;
+        if (threadIdx.x < blockDim.x - 1)
+            scan[threadIdx.x + 1] = _h;//hist[threadIdx.x];
         else
-            scan[threadIdx.x] = hist[threadIdx.x - 1];
+            scan[0] = 0;
         __syncthreads();
+        int _last_hist = hist[blockDim.x - 1];
         for (int stride = 1; stride < blockDim.x; stride *= 2)
         {
             int val = 0;
@@ -399,28 +267,18 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
         }
         __syncthreads();
         // scatter
-        int nZeros = blockDim.x - scan[blockDim.x - 1] - hist[blockDim.x - 1];
+        int nZeros = blockDim.x - scan[blockDim.x - 1] - _last_hist;//hist[blockDim.x - 1];
         int rank = 0;
-        if (hist[threadIdx.x] == 0)
+        if (_h == 0)
             rank = threadIdx.x - scan[threadIdx.x];
         else
             rank = nZeros + scan[threadIdx.x];
-        dst[rank] = s_hist[threadIdx.x];
-        dst_ori[rank] = s_in[threadIdx.x];
+        dst[rank] = _hist;//s_hist[threadIdx.x];
+        dst_ori[rank] = _in;//s_in[threadIdx.x];
         __syncthreads();        
         // copy or swap
         s_hist[threadIdx.x] = dst[threadIdx.x];
         s_in[threadIdx.x] = dst_ori[threadIdx.x];
-    //    if (threadIdx.x == 0)
-    //     {
-    //         int * temp = &s_hist[0]; 
-    //         s_hist = &dst[0]; 
-    //         dst = temp;
-    //         temp = &s_in[0]; 
-    //         s_in = &dst_ori[0]; 
-    //         dst_ori = temp; 
-    //     }
-    //     __syncthreads();
     }
     __syncthreads();
     // TODO: B2
@@ -432,10 +290,11 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
             startIndex[s_hist[threadIdx.x]] = threadIdx.x;
     }
     __syncthreads();
+    int startId = startIndex[s_hist[threadIdx.x]];
     // TODO: B3
     if (id < n)
     {
-        int preRank = threadIdx.x - startIndex[s_hist[threadIdx.x]];
+        int preRank = threadIdx.x - startId; //ndex[s_hist[threadIdx.x]];
         int bin = ((s_in[threadIdx.x] >> bit) & (nBins - 1));
         int scan = histScan[bin * gridDim.x + blockIdx.x];
         int rank = scan + preRank;
@@ -443,7 +302,7 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
     }
 }
 
-void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, int * blockSizes)
+void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBits, int * blockSizes)
 {
     int nBins = 1 << nBits; // 2^nBits
     dim3 blkSize1(blockSizes[0]); // block size for histogram kernel
@@ -468,7 +327,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
     {
     	// TODO: Compute "hist" of the current digit
         CHECK(cudaMemset(d_scan, 0, nBins * gridSize1.x * sizeof(int)));
-        computeHistKernel<<<gridSize1, blkSize1, blkSize1.x * sizeof(int)>>>(d_src, n, d_scan, nBins, bit);
+        computeHistKernel<<<gridSize1, blkSize1, nBins * sizeof(int)>>>(d_src, n, d_scan, nBins, bit);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
 
@@ -487,7 +346,7 @@ void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, i
 	    CHECK(cudaGetLastError());
 
         // TODO: Scatter
-        Scatter<<<gridSize1, blkSize1, (blkSize1.x * 7 + 1)* sizeof(int)>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
+        Scatter<<<gridSize1, blkSize1, (blkSize1.x * 6 +  nBins) * sizeof(int)>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
         
@@ -535,7 +394,7 @@ void sort(const uint32_t * in, int n,
     else if (useDevice == 2)
     {
         printf("\nRadix sort by device level 2\n");
-        sortRadixBase04_1(in, n, out, nBits, blockSizes);
+        sortRadixBase04_device(in, n, out, nBits, blockSizes);
     }
     else
     {
