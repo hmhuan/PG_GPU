@@ -111,29 +111,20 @@ void sortByHost(const uint32_t * in, int n,
     free(originalSrc);
 }
 
-void sortRadixBase04(const uint32_t * in, int n, 
-        uint32_t * out, 
-        int nBits, int * blockSizes)
+void sortRadixBase04(const uint32_t * in, int n, uint32_t * out, int nBits, int * blockSizes)
 {
-
     dim3 blkSize1(blockSizes[0]); // block size for histogram kernel
     dim3 blkSize2(blockSizes[1]); // block size for scan kernel
     dim3 gridSize((n - 1) / blkSize1.x + 1); // grid size for histogram kernel 
     // TODO
     int nBins = 1 << nBits; // 2^nBits
     int * hist = (int *)malloc(nBins * gridSize.x * sizeof(int));
-    int *histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
-
-
+    int * histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
-    int * temp = (int *)malloc(nBins * gridSize.x * sizeof(int));
 
-
-    //printf("gridSize = %d\n", gridSize.x);
-    //printf("nBins = %d\n", nBins);
     int nHist = nBins * gridSize.x;
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
@@ -164,7 +155,6 @@ void sortRadixBase04(const uint32_t * in, int n,
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
     // Free memories
-    free(temp);
     free(hist);
     free(histScan);
     free(originalSrc);
@@ -256,7 +246,7 @@ __global__ void scatter(uint32_t * in, int bit, int *histScan, int n, int nBins,
     }
 }
 
-void sortRadixBase04_1(const uint32_t * in, int n, 
+void sortRadixBase04_device(const uint32_t * in, int n, 
         uint32_t * out, 
         int nBits, int * blockSizes)
 {
@@ -275,16 +265,14 @@ void sortRadixBase04_1(const uint32_t * in, int n,
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
 
-    uint32_t * d_src, *d_dst;
+    uint32_t * d_src;
     int *d_hist, *d_scan, *d_blkSums;
 
     CHECK(cudaMalloc(&d_src, n * sizeof(uint32_t)));
-    //CHECK(cudaMalloc(&d_dst, n * sizeof(uint32_t)));
 	CHECK(cudaMalloc(&d_hist, nBins * gridSize1.x * sizeof(int)));
 	CHECK(cudaMalloc(&d_scan, nBins * gridSize1.x * sizeof(int)));
 	CHECK(cudaMalloc(&d_blkSums, gridSize2.x * sizeof(int)));
 
-    //CHECK(cudaMemcpy(d_src, src, n * sizeof(uint32_t), cudaMemcpyHostToDevice));
     size_t sMemSize1 = nBins * sizeof(int); 
     size_t sMemSize2 = blkSize2.x * sizeof(int);
     
@@ -312,18 +300,6 @@ void sortRadixBase04_1(const uint32_t * in, int n,
 
         CHECK(cudaMemcpy(scan, d_scan, nBins * gridSize1.x * sizeof(int), cudaMemcpyDeviceToHost)); 
         
-        // TODO: Compute "hist" of the current digit
-        // memset(hist, 0, nBins * gridSize1.x * sizeof(int));
-        // for (int i = 0; i < n; i++)
-        // {
-        //     int bin = (src[i] >> bit) & (nBins - 1);
-        //     hist[bin * gridSize1.x + i / blkSize1.x]++;
-        // }
-        // TODO: Exclusive scan
-        // scan[0] = 0;
-        // for (int i = 1; i < gridSize1.x * nBins; i++)
-        //     scan[i] = scan[i - 1] + hist[i - 1];
-        
         // TODO: Scatter
         for (int i = 0; i < n ; i++)
         {
@@ -336,15 +312,11 @@ void sortRadixBase04_1(const uint32_t * in, int n,
         src = dst;
         dst = temp; 
 
-        //CHECK(cudaMemcpy(d_histScan, histScan, nBins * gridSize.x * sizeof(int), cudaMemcpyHostToDevice));
-        //scatter<<<gridSize, blkSize1>>>(d_src, bit, d_histScan, n, nBins, d_dst);
     }
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
-    //CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
     // Free memories
     CHECK(cudaFree(d_src));
-    //CHECK(cudaFree(d_dst));
     CHECK(cudaFree(d_hist));
     CHECK(cudaFree(d_scan));
     CHECK(cudaFree(d_blkSums));
@@ -376,7 +348,7 @@ void sort(const uint32_t * in, int n,
     else 
     {
         printf("\nRadix sort by device\n");
-        sortRadixBase04_1(in, n, out, nBits, blockSizes);
+        sortRadixBase04_device(in, n, out, nBits, blockSizes);
     }
     timer.Stop();
     printf("Time: %.3f ms\n", timer.Elapsed());
@@ -432,6 +404,7 @@ int main(int argc, char ** argv)
     if (argc > 1)
         nBits = atoi(argv[1]);
     printf("\nInput size: %d\n", n);
+    printf("nBits: %d\n", nBits);
 
     // ALLOCATE MEMORIES
     size_t bytes = n * sizeof(uint32_t);
@@ -443,8 +416,6 @@ int main(int argc, char ** argv)
     // SET UP INPUT DATA
     for (int i = 0; i < n; i++)
        in[i] = rand() % 100;
-    //printArray(in, n);
-	
 	// DETERMINE BLOCK SIZES
     int blockSizes[2] = {512, 512}; // One for histogram, one for scan
     if (argc == 4)

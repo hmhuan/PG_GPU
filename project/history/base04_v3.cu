@@ -114,14 +114,13 @@ void sortRadixBase04(const uint32_t * in, int n, uint32_t * out,  int nBits, int
     // TODO
     int nBins = 1 << nBits; // 2^nBits
     int * hist = (int *)malloc(nBins * gridSize.x * sizeof(int));
-    int *histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
+    int * histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
 
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
     int nHist = nBins * gridSize.x;
-    int * temp = (int *)malloc(nHist * sizeof(int));
 
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
@@ -152,7 +151,6 @@ void sortRadixBase04(const uint32_t * in, int n, uint32_t * out,  int nBits, int
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
     // Free memories
-    free(temp);
     free(hist);
     free(histScan);
     free(originalSrc);
@@ -526,6 +524,7 @@ int main(int argc, char ** argv)
     if (argc > 1)
         nBits = atoi(argv[1]);
     printf("\nInput size: %d\n", n);
+    printf("nBits: %d\n", nBits);
 
     // ALLOCATE MEMORIES
     size_t bytes = n * sizeof(uint32_t);
