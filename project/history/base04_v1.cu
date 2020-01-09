@@ -194,7 +194,7 @@ void sort(const uint32_t * in, int n,
     }
     else 
     {
-    	printf("\nRadix sort by device\n");
+    	printf("\nRadix sort by base04 host\n");
         sortRadixBase04(in, n, out, nBits, blockSizes);
     }
 
