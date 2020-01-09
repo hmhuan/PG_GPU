@@ -121,7 +121,6 @@ void sortRadixBase04(const uint32_t * in, int n, uint32_t * out,  int nBits, int
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
     int nHist = nBins * gridSize.x;
-    int * temp = (int *)malloc(nHist * sizeof(int));
 
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
@@ -152,7 +151,6 @@ void sortRadixBase04(const uint32_t * in, int n, uint32_t * out,  int nBits, int
     // TODO: Copy result to "out"
     memcpy(out, src, n * sizeof(uint32_t));
     // Free memories
-    free(temp);
     free(hist);
     free(histScan);
     free(originalSrc);
@@ -229,8 +227,8 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
     int * s_hist = (int *)&s_in[blockDim.x];
     int *dst = (int *)&s_hist[blockDim.x];
     int *dst_ori = (int *)&dst[blockDim.x];
-    int *startIndex = (int *)&dst_ori[blockDim.x];
-    int * scan = (int *)&startIndex[nBins];
+    int *startIndex = (int *)&dst_ori[blockDim.x]; // Cấp phát nBins
+    int * scan = (int *)&startIndex[nBins]; 
     int * hist = (int *)&scan[blockDim.x];
 
     int id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -242,6 +240,8 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
     }
     else 
         s_hist[threadIdx.x] = nBins - 1;
+    scan[threadIdx.x] = 0;
+    __syncthreads();
     // TODO: B1 - sort radix with k = 1
     for (int b = 0; b < nBits; b++)
     {
@@ -249,11 +249,9 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
         int _hist = s_hist[threadIdx.x];
         int _in = s_in[threadIdx.x];
         int _h = (_hist >> b) & 1;
-        hist[threadIdx.x] = _h;//(_hist >> b) & 1;
+        hist[threadIdx.x] = _h;
         if (threadIdx.x < blockDim.x - 1)
-            scan[threadIdx.x + 1] = _h;//hist[threadIdx.x];
-        else
-            scan[0] = 0;
+            scan[threadIdx.x + 1] = _h;
         __syncthreads();
         int _last_hist = hist[blockDim.x - 1];
         for (int stride = 1; stride < blockDim.x; stride *= 2)
@@ -267,12 +265,13 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
         }
         __syncthreads();
         // scatter
+        int scan_ = scan[threadIdx.x];
         int nZeros = blockDim.x - scan[blockDim.x - 1] - _last_hist;//hist[blockDim.x - 1];
         int rank = 0;
         if (_h == 0)
-            rank = threadIdx.x - scan[threadIdx.x];
+            rank = threadIdx.x - scan_;//scan[threadIdx.x];
         else
-            rank = nZeros + scan[threadIdx.x];
+            rank = nZeros + scan_;//scan[threadIdx.x];
         dst[rank] = _hist;//s_hist[threadIdx.x];
         dst_ori[rank] = _in;//s_in[threadIdx.x];
         __syncthreads();        
@@ -290,11 +289,10 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
             startIndex[s_hist[threadIdx.x]] = threadIdx.x;
     }
     __syncthreads();
-    int startId = startIndex[s_hist[threadIdx.x]];
     // TODO: B3
     if (id < n)
     {
-        int preRank = threadIdx.x - startId; //ndex[s_hist[threadIdx.x]];
+        int preRank = threadIdx.x - startIndex[s_hist[threadIdx.x]];
         int bin = ((s_in[threadIdx.x] >> bit) & (nBins - 1));
         int scan = histScan[bin * gridDim.x + blockIdx.x];
         int rank = scan + preRank;
@@ -312,7 +310,8 @@ void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBi
 
     int * blkSums = (int *)malloc(gridSize2.x * sizeof(int));
     uint32_t * d_src, *d_dst;
-    int *d_scan, *d_blkSums; 
+    int *d_scan, *d_blkSums;
+    float time_hist = 0, time_scan = 0, time_add = 0, time_scatter = 0; 
 
     CHECK(cudaMalloc(&d_src, n * sizeof(uint32_t)));
     CHECK(cudaMalloc(&d_dst, n * sizeof(uint32_t)));
@@ -323,30 +322,47 @@ void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBi
     //size_t sMemSize1 = nBins * sizeof(int); 
     size_t sMemSize2 = blkSize2.x * sizeof(int);
     
+    GpuTimer timer; 
+
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
     	// TODO: Compute "hist" of the current digit
         CHECK(cudaMemset(d_scan, 0, nBins * gridSize1.x * sizeof(int)));
+        timer.Start();
         computeHistKernel<<<gridSize1, blkSize1, nBins * sizeof(int)>>>(d_src, n, d_scan, nBins, bit);
+        timer.Stop();
+        time_hist += timer.Elapsed();
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
 
         // TODO: Scan
+        timer.Start();
         scanBlkKernel<<<gridSize2, blkSize2, sMemSize2>>>(d_scan, nBins * gridSize1.x, d_scan, d_blkSums);
+        timer.Stop();
+        time_scan += timer.Elapsed();
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
-
+        
+        timer.Start();
         CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize2.x * sizeof(int), cudaMemcpyDeviceToHost));
         for (int i = 1; i < gridSize2.x; i++)
             blkSums[i] += blkSums[i - 1];
         CHECK(cudaMemcpy(d_blkSums, blkSums, gridSize2.x * sizeof(int), cudaMemcpyHostToDevice));
+        timer.Stop();
+        printf("Time: %.3f ms\n", timer.Elapsed());
         
+        timer.Start();
         addBlkSums<<<gridSize2, blkSize2>>>(d_scan, nBins * gridSize1.x, d_blkSums);
+        timer.Stop();
+        time_add += timer.Elapsed();
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
 
         // TODO: Scatter
+        timer.Start();
         Scatter<<<gridSize1, blkSize1, (blkSize1.x * 6 +  nBins) * sizeof(int)>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
+        timer.Stop();
+        time_scatter +=  timer.Elapsed();
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
         
@@ -355,14 +371,19 @@ void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBi
         d_src = d_dst;
         d_dst = temp; 
     }
+    printf("\nTime compute hist: %.3f ms\n", time_hist);
+    printf("Time scan: %.3f ms\n", time_scan);
+    printf("Time add blkSums: %.3f ms\n", time_add);
+    printf("Time Scatter: %.3f ms\n\n", time_scatter);
     // TODO: Copy result to "out"
     CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
+
     // Free memories
+    free(blkSums);
     CHECK(cudaFree(d_src));
     CHECK(cudaFree(d_dst));
     CHECK(cudaFree(d_scan));
     CHECK(cudaFree(d_blkSums));    
-    free(blkSums);
 }
 
 void sortByDevice_thrust(const uint32_t * in, int n, uint32_t * out)
@@ -380,16 +401,15 @@ void sort(const uint32_t * in, int n,
 {
     GpuTimer timer; 
     timer.Start();
-
     if (useDevice == 0)
     {
     	printf("\nRadix sort by host\n");
-        sortByHost(in, n, out, nBits);
+        sortByHost(in, n, out, nBits = 8);
     }
     else if (useDevice == 1)
     {
     	printf("\nRadix sort by host level 1\n");
-        sortRadixBase04(in, n, out, nBits, blockSizes);
+        sortRadixBase04(in, n, out, nBits = 8, blockSizes); //use default 8
     }
     else if (useDevice == 2)
     {
@@ -479,8 +499,8 @@ int main(int argc, char ** argv)
     // SORT BY HOST
     sort(in, n, correctOut, nBits);
 
-	sort(in, n, out_0, nBits, 1, blockSizes);
-	checkCorrectness(out_0, correctOut, n);
+	//sort(in, n, out_0, nBits, 1, blockSizes);
+	//checkCorrectness(out_0, correctOut, n);
     
     sort(in, n, out_1, nBits, 2, blockSizes);
 	checkCorrectness(out_1, correctOut, n);
