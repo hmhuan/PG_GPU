@@ -293,7 +293,6 @@ __global__ void Scatter(uint32_t * in, int n, int nBits, int bit, int nBins, int
         int preRank = threadIdx.x - startIndex[_hist];
         int bin = ((_in >> bit) & (nBins - 1));
         int scan = histScan[bin * gridDim.x + blockIdx.x];
-        //int rank = scan + preRank;
         out[scan + preRank] = _in;
     }
 }
@@ -309,7 +308,6 @@ void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBi
     int * blkSums = (int *)malloc(gridSize2.x * sizeof(int));
     uint32_t * d_src, *d_dst;
     int *d_scan, *d_blkSums;
-    // float time_hist = 0, time_scan = 0, time_add = 0, time_scatter = 0; 
 
     CHECK(cudaMalloc(&d_src, n * sizeof(uint32_t)));
     CHECK(cudaMalloc(&d_dst, n * sizeof(uint32_t)));
@@ -320,54 +318,36 @@ void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBi
 
     size_t sMemSize2 = blkSize2.x * sizeof(int);
     
-    //GpuTimer timer; 
-
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
     	// TODO: Compute "hist" of the current digit
         CHECK(cudaMemset(d_scan, 0, nBins * gridSize1.x * sizeof(int)));
-        //timer.Start();
         computeHistKernel<<<gridSize1, blkSize1, nBins * sizeof(int)>>>(d_src, n, d_scan, nBins, bit);
-        //timer.Stop();
-        //time_hist += timer.Elapsed();
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
 
         // TODO: Scan
-        // timer.Start();
         scanBlkKernel<<<gridSize2, blkSize2, sMemSize2>>>(d_scan, nBins * gridSize1.x, d_scan, d_blkSums);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
-        // timer.Stop();
-        // time_scan += timer.Elapsed();
 
         CHECK(cudaMemcpy(blkSums, d_blkSums, gridSize2.x * sizeof(int), cudaMemcpyDeviceToHost));
         for (int i = 1; i < gridSize2.x; i++)
             blkSums[i] += blkSums[i - 1];
         CHECK(cudaMemcpy(d_blkSums, blkSums, gridSize2.x * sizeof(int), cudaMemcpyHostToDevice));
         
-        // timer.Start();
         addBlkSums<<<gridSize2, blkSize2>>>(d_scan, nBins * gridSize1.x, d_blkSums);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
-        // timer.Stop();
-        // time_add += timer.Elapsed();
         // TODO: Scatter
-        // timer.Start();
         Scatter<<<gridSize1, blkSize1, (blkSize1.x * 6 +  nBins) * sizeof(int)>>>(d_src, n, nBits, bit, nBins, d_scan, d_dst);
         cudaDeviceSynchronize();
 	    CHECK(cudaGetLastError());
-        // timer.Stop();
-        // time_scatter +=  timer.Elapsed();
         // TODO: Swap "src" and "dst"
         uint32_t * temp = d_src;
         d_src = d_dst;
         d_dst = temp; 
     }
-    // printf("Time compute hist: %.3f ms\n", time_hist);
-    // printf("Time scan: %.3f ms\n", time_scan);
-    // printf("Time add blkSums: %.3f ms\n", time_add);
-    // printf("Time Scatter: %.3f ms\n\n", time_scatter);
     // TODO: Copy result to "out"
     CHECK(cudaMemcpy(out, d_src, n * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
@@ -504,7 +484,6 @@ int main(int argc, char ** argv)
     {
         float time = sort(in, n, out_1, nBits, 2, blockSizes);
         avg_time += time;
-        //printf("loop %d: %.3f ms\n", i + 1, time);
     }
     printf("Avg Time: %.3f ms\n", avg_time / loop);
     checkCorrectness(out_1, correctOut, n);

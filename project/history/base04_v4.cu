@@ -168,7 +168,6 @@ __global__ void computeHistKernel(uint32_t * in, int n, int * hist, int nBins, i
     if (i < n)
     {
         int bin = (in[i] >> bit) & (nBins - 1);
-        //atomicAdd(&hist[bin * gridDim.x + blockIdx.x], 1);
         atomicAdd(&s_bin[bin], 1);
     }
     __syncthreads();
@@ -379,7 +378,7 @@ float sort(const uint32_t * in, int n,
     }
     else if (useDevice == 2)
     {
-        
+
         sortRadixBase04_1(in, n, out, nBits, blockSizes);
     }
     else
@@ -472,7 +471,7 @@ int main(int argc, char ** argv)
 	checkCorrectness(out_0, correctOut, n);
     
     float avg_time = 0;
-    int loop = 16;
+    int loop = 16; // để loop = 1 để đo các hàm. 
     printf("\nRadix sort by device level 2\n");
     for (int i = 0; i < loop; i++)
     {
