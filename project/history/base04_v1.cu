@@ -60,20 +60,11 @@ void sortByHost(const uint32_t * in, int n,
     int * hist = (int *)malloc(nBins * sizeof(int));
     int * histScan = (int *)malloc(nBins * sizeof(int));
 
-    // In each counting sort, we sort data in "src" and write result to "dst"
-    // Then, we swap these 2 pointers and go to the next counting sort
-    // At first, we assign "src = in" and "dest = out"
-    // However, the data pointed by "in" is read-only 
-    // --> we create a copy of this data and assign "src" to the address of this copy
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
     uint32_t * originalSrc = src; // Use originalSrc to free memory later
     uint32_t * dst = out;
 
-    // Loop from LSD (Least Significant Digit) to MSD (Most Significant Digit)
-    // (Each digit consists of nBits bits)
-	// In each loop, sort elements according to the current digit 
-	// (using STABLE counting sort)
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
     {
     	// TODO: Compute "hist" of the current digit

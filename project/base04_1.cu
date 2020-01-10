@@ -418,9 +418,10 @@ float sort(const uint32_t * in, int n,
         sortByDevice_thrust(in, n, out);
     }
     timer.Stop();
+    float time = timer.Elapsed();
     if (useDevice != 2)
-        printf("Time: %.3f ms\n", timer.Elapsed());
-    return timer.Elapsed();
+        printf("Time: %.3f ms\n", time);
+    return time;
 }
 
 
@@ -509,10 +510,9 @@ int main(int argc, char ** argv)
         avg_time += time;
         //printf("loop %d: %.3f ms\n", i + 1, time);
     }
-    printf("Time: %.3f ms\n", avg_time / loop);
+    printf("Avg Time: %.3f ms\n", avg_time / loop);
     checkCorrectness(out_1, correctOut, n);
-
-    // SORT BY DEVICE by thrust
+        
     sort(in, n, out_thrust, nBits, 3, blockSizes);
     checkCorrectness(out_thrust, out_1, n);
 

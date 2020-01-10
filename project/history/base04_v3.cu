@@ -58,17 +58,15 @@ struct GpuTimer
     }
 };
 
-void sortByHost(const uint32_t * in, int n,
-                uint32_t * out,
-                int nBits)
+void sortByHost(const uint32_t * in, int n, uint32_t * out, int nBits)
 {
-    int nBins = 1 << nBits; // 2^nBits
+    int nBins = 1 << nBits;
     int * hist = (int *)malloc(nBins * sizeof(int));
     int * histScan = (int *)malloc(nBins * sizeof(int));
 
     uint32_t * src = (uint32_t *)malloc(n * sizeof(uint32_t));
     memcpy(src, in, n * sizeof(uint32_t));
-    uint32_t * originalSrc = src; // Use originalSrc to free memory later
+    uint32_t * originalSrc = src;
     uint32_t * dst = out;
 
     for (int bit = 0; bit < sizeof(uint32_t) * 8; bit += nBits)
@@ -112,7 +110,7 @@ void sortRadixBase04(const uint32_t * in, int n, uint32_t * out,  int nBits, int
     dim3 blkSize2(blockSizes[1]); // block size for scan kernel
     dim3 gridSize((n - 1) / blkSize1.x + 1); // grid size for histogram kernel 
     // TODO
-    int nBins = 1 << nBits; // 2^nBits
+    int nBins = 1 << nBits;
     int * hist = (int *)malloc(nBins * gridSize.x * sizeof(int));
     int * histScan = (int * )malloc(nBins * gridSize.x * sizeof(int));
 
@@ -354,7 +352,7 @@ __global__ void scatter(uint32_t * in, int * preRank, int bit,
     }
 }
 
-void sortRadixBase04_1(const uint32_t * in, int n,  uint32_t * out, int nBits, int * blockSizes)
+void sortRadixBase04_device(const uint32_t * in, int n,  uint32_t * out, int nBits, int * blockSizes)
 {
     int nBins = 1 << nBits; // 2^nBits
     dim3 blkSize1(blockSizes[0]); // block size for histogram kernel
@@ -443,7 +441,7 @@ void sortByDevice_thrust(const uint32_t * in, int n, uint32_t * out)
 	thrust::copy(dv_out.begin(), dv_out.end(), out);
 }
 
-void sort(const uint32_t * in, int n, 
+float sort(const uint32_t * in, int n, 
         uint32_t * out, 
         int nBits,
         int useDevice=0, int * blockSizes=NULL)
@@ -463,8 +461,7 @@ void sort(const uint32_t * in, int n,
     }
     else if (useDevice == 2)
     {
-        printf("\nRadix sort by device level 2\n");
-        sortRadixBase04_1(in, n, out, nBits, blockSizes);
+        sortRadixBase04_device(in, n, out, nBits, blockSizes);
     }
     else
     {
@@ -472,7 +469,10 @@ void sort(const uint32_t * in, int n,
         sortByDevice_thrust(in, n, out);
     }
     timer.Stop();
-    printf("Time: %.3f ms\n", timer.Elapsed());
+    float time = timer.Elapsed();
+    if (useDevice != 2)
+        printf("Time: %.3f ms\n", time);
+    return time;
 }
 
 
@@ -553,8 +553,17 @@ int main(int argc, char ** argv)
 	sort(in, n, out_0, nBits, 1, blockSizes);
 	checkCorrectness(out_0, correctOut, n);
 
-	sort(in, n, out_1, nBits, 2, blockSizes);
-	checkCorrectness(out_1, correctOut, n);
+	float avg_time = 0;
+    int loop = 16;
+    printf("\nRadix sort by device level 2\n");
+    for (int i = 0; i < loop; i++)
+    {
+        float time = sort(in, n, out_1, nBits, 2, blockSizes);
+        avg_time += time;
+        //printf("loop %d: %.3f ms\n", i + 1, time);
+    }
+    printf("Avg Time: %.3f ms\n", avg_time / loop);
+    checkCorrectness(out_1, correctOut, n);
 
     // SORT BY DEVICE by thrust
     sort(in, n, out_thrust, nBits, 3, blockSizes);
