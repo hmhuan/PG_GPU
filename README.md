@@ -1,7 +1,7 @@
 # PG_GPU
 Parallel Programming on GPU
 
-Lecturer: Ms. Tran Trung Kien
+Lecturer: Mr. Tran Trung Kien
 
 this repo include assignment (weekly homework) and final project in course.
 
